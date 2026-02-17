@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import type { StickyLayer } from "@/lib/yjs-store";
 import { sharedLayers } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
+import styles from "./StickyNote.module.css";
 
 interface StickyNoteProps {
   id: string;
@@ -99,10 +100,8 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
   return (
     <div
       className={cn(
-        "absolute min-w-[120px] cursor-grab rounded-lg border p-3 shadow active:cursor-grabbing pointer-events-auto",
-        selected
-          ? "border-blue-500 ring-2 ring-blue-500/30"
-          : "border-amber-200 bg-amber-50 hover:border-amber-300"
+        styles.stickyNote,
+        selected && styles.stickyNoteSelected
       )}
       style={{
         left: x,
@@ -116,7 +115,7 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
     >
       {isEditing ? (
         <textarea
-          className="min-h-[60px] w-full resize-none rounded border-0 bg-transparent p-0 text-sm text-zinc-800 outline-none focus:ring-0"
+          className={styles.textArea}
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
           onBlur={commitText}
@@ -125,7 +124,7 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
           rows={3}
         />
       ) : (
-        <span className="block whitespace-pre-wrap break-words text-sm text-zinc-800">
+        <span className={styles.textDisplay}>
           {text || "Sticky"}
         </span>
       )}

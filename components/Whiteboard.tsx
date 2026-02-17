@@ -10,6 +10,7 @@ import { Avatars } from "./Avatars";
 import { CursorPresence } from "./CursorPresence";
 import { StickyNote } from "./StickyNote";
 import { ShapeRectangle } from "./ShapeRectangle";
+import styles from "./Whiteboard.module.css";
 
 const DEFAULT_RECT_SIZE = 120;
 
@@ -175,17 +176,15 @@ function WhiteboardInner() {
     <div
       ref={containerRef}
       data-board-container
-      className="relative h-screen w-full overflow-hidden bg-zinc-100"
+      className={styles.boardContainer}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
       onWheel={handleWheel}
-      style={{ touchAction: "none" }}
     >
       {/* Pan handle layer - covers viewport for infinite panning */}
       <div
         data-pan-handle
-        className="absolute inset-0 z-0"
-        style={{ cursor: panStartRef.current ? "grabbing" : "grab" }}
+        className={`${styles.panHandle} ${panStartRef.current ? styles.panHandleGrabbing : styles.panHandleGrab}`}
         onPointerDown={handleBoardPointerDown}
         onPointerMove={handleBoardPointerMove}
         onPointerUp={handleBoardPointerUp}
@@ -194,7 +193,7 @@ function WhiteboardInner() {
 
       {/* Infinite board: transformed world */}
       <div
-        className="absolute inset-0 origin-top-left pointer-events-none"
+        className={styles.worldTransform}
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
         }}
@@ -235,18 +234,18 @@ function WhiteboardInner() {
       <CursorPresence />
 
       {/* Toolbar */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-2 rounded-lg border border-zinc-200 bg-white/95 p-2 shadow">
+      <div className={styles.toolbar}>
         <button
           type="button"
           onClick={addSticky}
-          className="rounded-md bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-200"
+          className={`${styles.toolbarButton} ${styles.addStickyButton}`}
         >
           Add sticky
         </button>
         <button
           type="button"
           onClick={addRectangle}
-          className="rounded-md bg-blue-100 px-3 py-1.5 text-sm font-medium text-blue-900 hover:bg-blue-200"
+          className={`${styles.toolbarButton} ${styles.addRectangleButton}`}
         >
           Add rectangle
         </button>
@@ -257,7 +256,7 @@ function WhiteboardInner() {
               sharedLayers.delete(selectedId);
               setSelectedId(null);
             }}
-            className="rounded-md bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-200"
+            className={`${styles.toolbarButton} ${styles.deleteButton}`}
           >
             Delete
           </button>

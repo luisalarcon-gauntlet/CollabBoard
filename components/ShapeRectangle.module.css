@@ -1,0 +1,15 @@
+/* Shape Rectangle Component Styles */
+.rectangle {
+  position: absolute;
+  cursor: grab;
+  border: 2px solid rgba(29, 78, 216, 0.5);
+  pointer-events: auto;
+}
+
+.rectangle:active {
+  cursor: grabbing;
+}
+
+.rectangleSelected {
+  box-shadow: 0 0 0 2px #3b82f6;
+}

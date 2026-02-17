@@ -2,6 +2,7 @@
 
 import { useAwareness } from "@/lib/useAwareness";
 import { useBoardTransform } from "@/lib/board-transform";
+import styles from "./CursorPresence.module.css";
 
 export function CursorPresence() {
   const users = useAwareness();
@@ -17,7 +18,7 @@ export function CursorPresence() {
         return (
           <div
             key={clientId}
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-1/2"
+            className={styles.cursor}
             style={{ left: screen.x, top: screen.y }}
           >
             <svg
@@ -26,7 +27,7 @@ export function CursorPresence() {
               viewBox="0 0 24 24"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
-              className="drop-shadow-md"
+              className={styles.cursorIcon}
             >
               <path
                 d="M5.653 4.133L4.018 20.358a.5.5 0 00.928.216l3.887-7.776 2.474 2.474 2.474-5.303L5.653 4.133z"
@@ -36,7 +37,7 @@ export function CursorPresence() {
                 strokeLinejoin="round"
               />
             </svg>
-            <div className="ml-4 mt-1 rounded bg-zinc-800 px-2 py-0.5 text-xs font-medium text-white shadow">
+            <div className={styles.cursorLabel}>
               {name}
             </div>
           </div>
