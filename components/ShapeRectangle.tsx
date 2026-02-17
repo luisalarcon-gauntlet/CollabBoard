@@ -67,7 +67,7 @@ export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, g
   return (
     <div
       className={cn(
-        "absolute cursor-grab border-2 border-blue-700/50 active:cursor-grabbing",
+        "absolute cursor-grab border-2 border-blue-700/50 active:cursor-grabbing pointer-events-auto",
         selected && "ring-2 ring-blue-500"
       )}
       style={{

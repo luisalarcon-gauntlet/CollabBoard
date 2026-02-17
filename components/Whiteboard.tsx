@@ -80,7 +80,7 @@ function WhiteboardInner() {
       const worldX = (pos.sx - p.x) / z;
       const worldY = (pos.sy - p.y) / z;
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      const newZoom = Math.min(3, Math.max(0.25, z + delta));
+      const newZoom = z + delta;
       setPan({
         x: pos.sx - worldX * newZoom,
         y: pos.sy - worldY * newZoom,
@@ -175,23 +175,24 @@ function WhiteboardInner() {
       onWheel={handleWheel}
       style={{ touchAction: "none" }}
     >
+      {/* Pan handle layer - covers viewport for infinite panning */}
+      <div
+        data-pan-handle
+        className="absolute inset-0 z-0"
+        style={{ cursor: panStartRef.current ? "grabbing" : "grab" }}
+        onPointerDown={handleBoardPointerDown}
+        onPointerMove={handleBoardPointerMove}
+        onPointerUp={handleBoardPointerUp}
+        onPointerLeave={handleBoardPointerUp}
+      />
+
       {/* Infinite board: transformed world */}
       <div
-        className="absolute inset-0 origin-top-left"
+        className="absolute inset-0 origin-top-left pointer-events-none"
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
         }}
       >
-        <div
-          data-pan-handle
-          className="absolute inset-0"
-          style={{ cursor: panStartRef.current ? "grabbing" : "grab" }}
-          onPointerDown={handleBoardPointerDown}
-          onPointerMove={handleBoardPointerMove}
-          onPointerUp={handleBoardPointerUp}
-          onPointerLeave={handleBoardPointerUp}
-        />
-
         {layerEntries.map(([id, layer]) => {
           if (!layer) return null;
           if (layer.type === "sticky") {

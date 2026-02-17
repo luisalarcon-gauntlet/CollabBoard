@@ -99,7 +99,7 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
   return (
     <div
       className={cn(
-        "absolute min-w-[120px] cursor-grab rounded-lg border p-3 shadow active:cursor-grabbing",
+        "absolute min-w-[120px] cursor-grab rounded-lg border p-3 shadow active:cursor-grabbing pointer-events-auto",
         selected
           ? "border-blue-500 ring-2 ring-blue-500/30"
           : "border-amber-200 bg-amber-50 hover:border-amber-300"

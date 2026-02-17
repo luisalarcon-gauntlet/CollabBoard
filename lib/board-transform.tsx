@@ -9,8 +9,8 @@ import {
   type ReactNode,
 } from "react";
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 3;
+const MIN_ZOOM = 0.01;
+const MAX_ZOOM = 100;
 const ZOOM_STEP = 0.15;
 
 export interface BoardTransformValue {
