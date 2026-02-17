@@ -128,6 +128,12 @@ function WhiteboardInner() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Delete" || e.key === "Backspace") {
+        // Don't delete if user is editing text in an input/textarea
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+        
         if (selectedId) {
           e.preventDefault();
           sharedLayers.delete(selectedId);
