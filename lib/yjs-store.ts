@@ -12,6 +12,8 @@ export type StickyLayer = {
   type: "sticky";
   x: number;
   y: number;
+  width?: number;
+  height?: number;
   text: string;
 };
 

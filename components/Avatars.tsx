@@ -13,22 +13,22 @@ export function Avatars() {
         return (
           <div
             key={clientId}
-            className={styles.avatar}
-            title={name}
+            className={styles.userCard}
           >
-            {avatar ? (
-              <img
-                src={avatar}
-                alt={name}
-                className={styles.avatarImage}
-              />
-            ) : (
-              <span className={styles.avatarInitial}>
-                {name.charAt(0).toUpperCase()}
-              </span>
-            )}
-            {/* Hover tooltip with name */}
-            <span className={styles.tooltip}>
+            <div className={styles.avatar}>
+              {avatar ? (
+                <img
+                  src={avatar}
+                  alt={name}
+                  className={styles.avatarImage}
+                />
+              ) : (
+                <span className={styles.avatarInitial}>
+                  {name.charAt(0).toUpperCase()}
+                </span>
+              )}
+            </div>
+            <span className={styles.userName}>
               {name}
             </span>
           </div>

@@ -10,9 +10,12 @@ import { Avatars } from "./Avatars";
 import { CursorPresence } from "./CursorPresence";
 import { StickyNote } from "./StickyNote";
 import { ShapeRectangle } from "./ShapeRectangle";
+import { StickyNote as StickyIcon, Square, Trash2, Home } from "lucide-react";
 import styles from "./Whiteboard.module.css";
 
 const DEFAULT_RECT_SIZE = 120;
+const DEFAULT_STICKY_WIDTH = 200;
+const DEFAULT_STICKY_HEIGHT = 150;
 
 function WhiteboardInner() {
   const layers = useYjsStore();
@@ -152,6 +155,8 @@ function WhiteboardInner() {
       type: "sticky",
       x: 100,
       y: 100,
+      width: DEFAULT_STICKY_WIDTH,
+      height: DEFAULT_STICKY_HEIGHT,
       text: "New note",
     });
     setSelectedId(id);
@@ -169,6 +174,19 @@ function WhiteboardInner() {
     });
     setSelectedId(id);
   }, []);
+
+  const resetView = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    // Center on (100, 100) with zoom 1.0
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    setPan({
+      x: centerX - 100,
+      y: centerY - 100,
+    });
+    setZoom(1.0);
+  }, [containerRef, setPan, setZoom]);
 
   const layerEntries = Array.from(layers.entries());
 
@@ -233,21 +251,25 @@ function WhiteboardInner() {
       <Avatars />
       <CursorPresence />
 
-      {/* Toolbar */}
+      {/* Vertical Toolbar */}
       <div className={styles.toolbar}>
         <button
           type="button"
           onClick={addSticky}
           className={`${styles.toolbarButton} ${styles.addStickyButton}`}
+          title="Add Sticky Note"
         >
-          Add sticky
+          <StickyIcon size={20} />
+          <span className={styles.buttonLabel}>Sticky</span>
         </button>
         <button
           type="button"
           onClick={addRectangle}
           className={`${styles.toolbarButton} ${styles.addRectangleButton}`}
+          title="Add Rectangle"
         >
-          Add rectangle
+          <Square size={20} />
+          <span className={styles.buttonLabel}>Rectangle</span>
         </button>
         {selectedId && (
           <button
@@ -257,10 +279,21 @@ function WhiteboardInner() {
               setSelectedId(null);
             }}
             className={`${styles.toolbarButton} ${styles.deleteButton}`}
+            title="Delete Selected"
           >
-            Delete
+            <Trash2 size={20} />
+            <span className={styles.buttonLabel}>Delete</span>
           </button>
         )}
+        <button
+          type="button"
+          onClick={resetView}
+          className={`${styles.toolbarButton} ${styles.resetButton}`}
+          title="Reset View"
+        >
+          <Home size={20} />
+          <span className={styles.buttonLabel}>Reset</span>
+        </button>
       </div>
     </div>
   );

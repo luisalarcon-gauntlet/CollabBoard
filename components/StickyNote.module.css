@@ -1,7 +1,6 @@
 /* Sticky Note Component Styles */
 .stickyNote {
   position: absolute;
-  min-width: 120px;
   cursor: grab;
   border-radius: var(--radius-lg);
   border: 1px solid #fde68a;
@@ -9,6 +8,8 @@
   padding: 0.75rem;
   box-shadow: 0 4px 6px -1px var(--color-shadow);
   pointer-events: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .stickyNote:active {
@@ -25,8 +26,6 @@
 }
 
 .textArea {
-  min-height: 60px;
-  width: 100%;
   resize: none;
   border-radius: var(--radius-sm);
   border: 0;
@@ -35,6 +34,7 @@
   font-size: 0.875rem;
   color: #27272a;
   outline: none;
+  flex: 1;
 }
 
 .textArea:focus {
@@ -48,4 +48,41 @@
   word-break: break-word;
   font-size: 0.875rem;
   color: #27272a;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.resizeHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background-color: white;
+  border: 2px solid #fbbf24;
+  border-radius: 50%;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.handleNW {
+  top: -6px;
+  left: -6px;
+  cursor: nw-resize;
+}
+
+.handleNE {
+  top: -6px;
+  right: -6px;
+  cursor: ne-resize;
+}
+
+.handleSW {
+  bottom: -6px;
+  left: -6px;
+  cursor: sw-resize;
+}
+
+.handleSE {
+  bottom: -6px;
+  right: -6px;
+  cursor: se-resize;
 }
