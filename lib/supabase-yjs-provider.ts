@@ -39,6 +39,7 @@ export class SupabaseYjsProvider {
   private opts: Required<SupabaseYjsProviderOptions>;
   private channel: RealtimeChannel | null = null;
   private saveTimer: ReturnType<typeof setInterval> | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
 
   constructor(
@@ -88,7 +89,6 @@ export class SupabaseYjsProvider {
 
     if (error) {
       // Load failure is normal if the table doesn't exist yet or RLS blocks anon.
-      // App still works with empty state and Realtime sync.
       if (process.env.NODE_ENV === "development") {
         console.warn(
           "[SupabaseYjsProvider] Could not load initial state:",
@@ -101,16 +101,21 @@ export class SupabaseYjsProvider {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = data as any;
-    if (row && row[columnName]) {
+    if (row && row[columnName] != null) {
       try {
-        const raw: string = row[columnName];
-        const bytes = base64ToUint8(raw);
+        const raw = row[columnName];
+        const bytes = decodeContentToUint8(raw);
         Y.applyUpdate(this.doc, bytes);
+        if (process.env.NODE_ENV === "development") {
+          console.log("[SupabaseYjsProvider] Loaded initial state from DB.");
+        }
       } catch (e) {
         if (process.env.NODE_ENV === "development") {
           console.warn("[SupabaseYjsProvider] Failed to apply stored update:", e);
         }
       }
+    } else if (process.env.NODE_ENV === "development") {
+      console.log("[SupabaseYjsProvider] No saved state in DB (empty board).");
     }
   }
 
@@ -127,12 +132,16 @@ export class SupabaseYjsProvider {
         { onConflict: roomColumn }
       );
 
-    if (error && process.env.NODE_ENV === "development") {
-      console.warn(
-        "[SupabaseYjsProvider] Save failed:",
-        error.message,
-        "— Check that yjs_updates exists and RLS allows insert/update."
-      );
+    if (error) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          "[SupabaseYjsProvider] Save failed:",
+          error.message,
+          "— Check that yjs_updates exists, content column is TEXT, and RLS allows insert/update."
+        );
+      }
+    } else if (process.env.NODE_ENV === "development") {
+      console.log("[SupabaseYjsProvider] Saved state to DB.");
     }
   }
 
@@ -150,7 +159,7 @@ export class SupabaseYjsProvider {
     this.channel
       .on("broadcast", { event: "yjs-update" }, ({ payload }) => {
         try {
-          const update = base64ToUint8(payload.update as string);
+          const update = decodeContentToUint8(payload.update as string);
           Y.applyUpdate(this.doc, update, "remote");
         } catch (e) {
           console.error("[SupabaseYjsProvider] bad remote update:", e);
@@ -158,7 +167,7 @@ export class SupabaseYjsProvider {
       })
       .on("broadcast", { event: "yjs-awareness" }, ({ payload }) => {
         try {
-          const update = base64ToUint8(payload.update as string);
+          const update = decodeContentToUint8(payload.update as string);
           applyAwarenessUpdate(this.awareness, update, "remote");
         } catch (e) {
           console.error("[SupabaseYjsProvider] bad awareness update:", e);
@@ -173,8 +182,13 @@ export class SupabaseYjsProvider {
 
   private setupDocListener() {
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
-      if (origin === "remote" || this.destroyed) return;
-      this.broadcastUpdate(update);
+      if (this.destroyed) return;
+      if (origin !== "remote") {
+        this.broadcastUpdate(update);
+        // Debounced save: persist within 1s of the last local change.
+        if (this.debounceTimer) clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => this.saveToDb(), 1_000);
+      }
     });
   }
 
@@ -218,6 +232,7 @@ export class SupabaseYjsProvider {
     this.destroyed = true;
 
     if (this.saveTimer) clearInterval(this.saveTimer);
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
     this.saveToDb();
 
     if (typeof window !== "undefined") {
@@ -230,7 +245,7 @@ export class SupabaseYjsProvider {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Helpers: base64 <-> Uint8Array                                     */
+/*  Helpers: base64 / hex <-> Uint8Array                               */
 /* ------------------------------------------------------------------ */
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -244,11 +259,24 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToUint8(b64: string): Uint8Array {
-  if (typeof Buffer !== "undefined") {
-    return new Uint8Array(Buffer.from(b64, "base64"));
+/** Decode DB content to bytes. Supports base64 string (TEXT column) or hex string (bytea output). */
+function decodeContentToUint8(raw: unknown): Uint8Array {
+  if (raw instanceof Uint8Array) return raw;
+  const str = typeof raw === "string" ? raw : String(raw);
+  // Postgres bytea hex format: "\x" + hex digits (backslash + 'x' in string)
+  if (str.length > 2 && str[0] === "\\" && str[1] === "x") {
+    const hex = str.slice(2);
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
   }
-  const binary = atob(b64);
+  // Base64 (TEXT column or legacy)
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(str, "base64"));
+  }
+  const binary = atob(str);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);

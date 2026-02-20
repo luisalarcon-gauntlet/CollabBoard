@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
-import { sharedLayers, getAwareness } from "@/lib/yjs-store";
+import { sharedLayers, getAwareness, ensurePersistence } from "@/lib/yjs-store";
 import type { RectangleLayer, StickyLayer } from "@/lib/yjs-store";
 import { BoardTransformProvider, useBoardTransform } from "@/lib/board-transform";
 import { Avatars } from "./Avatars";
@@ -44,6 +44,11 @@ function WhiteboardInner() {
     },
     [containerRef]
   );
+
+  // Start persistence (load from DB, start save timer) as soon as the board mounts.
+  useEffect(() => {
+    ensurePersistence();
+  }, []);
 
   useEffect(() => {
     const awareness = getAwareness();

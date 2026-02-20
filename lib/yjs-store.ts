@@ -52,3 +52,8 @@ function getProvider(): SupabaseYjsProvider | null {
 export function getAwareness(): Awareness | null {
   return getProvider()?.awareness ?? null;
 }
+
+/** Call when the board is mounted so persistence (load/save) starts immediately. */
+export function ensurePersistence(): void {
+  getProvider();
+}

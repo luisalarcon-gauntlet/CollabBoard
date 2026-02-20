@@ -25,11 +25,15 @@ This guide gets the app **deployed and publicly accessible** (MVP requirement).
 
 5. **Deploy**: Vercel will build and deploy. Your app will be publicly accessible at the given URL.
 
-## Optional: Supabase production
+## Board persistence (Supabase)
 
-- Use the same Supabase project (and keys) for dev and prod, or create a separate project for production.
-- Ensure `yjs_updates` and Realtime are set up (run `supabase/schema.sql` in the SQL Editor for the project you use).
-- If you use a different Supabase project for prod, set the prod env vars in Vercel to that project’s URL and anon key.
+Board state is saved to Supabase so it survives refresh and logout.
+
+1. **Env vars** (required for persistence): set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` (dev) or in Vercel (prod). Get them from [Supabase Dashboard](https://supabase.com/dashboard/project/_/settings/api).
+
+2. **Schema**: run the SQL in `supabase/schema.sql` in your Supabase project’s [SQL Editor](https://supabase.com/dashboard/project/_/sql). This creates the `yjs_updates` table and RLS policies. The `content` column is `text` (base64-encoded Yjs state). If you already created the table with `content bytea`, either recreate the table from `schema.sql` or run: `ALTER TABLE yjs_updates ALTER COLUMN content TYPE text;` so the app can save correctly (the app sends base64 strings).
+
+3. **Check logs**: In dev, open the browser console. You should see `[SupabaseYjsProvider] Loaded initial state from DB.` or `No saved state in DB (empty board).` on load, and `Saved state to DB.` every ~5s after changes. Any `Could not load initial state` or `Save failed` message indicates a config or schema issue (missing env, table not created, or RLS blocking).
 
 ## Checklist
 

@@ -1,10 +1,11 @@
 -- CollabBoard: Yjs persistence table
 -- Run this in the Supabase SQL Editor (https://supabase.com/dashboard/project/_/sql)
+-- Content is base64-encoded Yjs state (TEXT so the app can read/write without bytea encoding issues).
 
 create table if not exists yjs_updates (
   id        bigserial     primary key,
   room_id   text          not null unique,
-  content   bytea,
+  content   text,
   created_at timestamptz  not null default now()
 );
 
