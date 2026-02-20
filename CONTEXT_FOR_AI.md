@@ -2,7 +2,7 @@
 
 > This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
 >
-> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, and shape rotation.
+> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, shape rotation, and graceful disconnect/reconnect UI with Vitest test suite.
 
 ---
 
@@ -86,6 +86,7 @@ CollabBoard/
 ├── proxy.ts                      # Next.js middleware — Clerk auth protection
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts              # Vitest test runner (environment: jsdom)
 ├── next.config.ts
 ├── eslint.config.mjs
 ├── components.json               # shadcn/ui config
@@ -222,6 +223,16 @@ The most complex piece of the system. Replaces standard Yjs providers (y-websock
 - Debounce-saves **1 second** after last local change
 - Saves on `window.beforeunload`
 - State serialized via `Y.encodeStateAsUpdate()`, base64-encoded to TEXT in Postgres
+
+**C) Connection status tracking:**
+- Exports `ConnectionStatus = "connected" | "disconnected"` type
+- `setStatusCallback(cb)` — registers or replaces the React callback; **immediately replays** `lastStatus` to the caller so late-mounting components are always in sync (fixes the singleton/mount-order race condition)
+- `emitStatus(status)` — private helper that stores `lastStatus` and notifies the current callback in one place
+- `window "offline"` / `window "online"` event listeners fire `emitStatus` immediately — this is the reliable path for DevTools Network throttling (the WebSocket close is too slow for that signal)
+- `channel.subscribe(status => ...)` also calls `emitStatus` for: `SUBSCRIBED` → connected, `CLOSED` / `CHANNEL_ERROR` / `TIMED_OUT` → disconnected
+- Listeners are cleaned up in `destroy()`
+
+`lib/yjs-store.ts` exposes `setConnectionStatusCallback(cb)` as the public entry point for React. `Whiteboard.tsx` registers a `useCallback`-stabilised handler in a `useEffect` (cleaned up on unmount) to drive a `connectionStatus` React state that shows/hides the reconnecting badge.
 
 **Required env vars:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
@@ -695,6 +706,8 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | **AI Board Agent — blueprint prompts** | ✅ | SWOT Analysis, Retrospective, User Journey with exact pixel coordinates |
 | **Shape rotation** | ✅ | Sticky notes, rectangles, circles — drag rotation handle, CRDT-synced via `ydoc.transact`, CSS `transform: rotate()` |
 | **Rotation — AI support** | ✅ | `rotation` field accepted by `create_layer`, `create_bulk_layers`, `update_layers` in `ai-executor.ts` |
+| **Graceful disconnect/reconnect UI** | ✅ | Non-blocking floating badge (pulsing amber dot + WifiOff icon); driven by `window` online/offline events + Supabase channel status; `lastStatus` replay prevents singleton race condition |
+| **Vitest test suite** | ✅ | 3 tests covering: channel error path, window offline/online events, late-registered callback replay (`npm test`) |
 
 ---
 
@@ -748,9 +761,11 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 - All remote cursors look identical except for the name label
 - Should assign each connected user a distinct colour
 
-**12. Reconnection & Offline UI**
-- The provider handles offline edits (they queue up in Yjs) but shows no user-visible feedback
-- Should show a "reconnecting…" banner when the Realtime channel drops
+**~~12. Reconnection & Offline UI~~** ✅ **Implemented**
+- A non-blocking floating badge (dark pill, pulsing amber dot, WifiOff icon, "Reconnecting…" text) appears at the top-center of the screen whenever `connectionStatus === "disconnected"`
+- Driven by `window` online/offline events (reliable for DevTools) + Supabase channel subscribe status
+- `SupabaseYjsProvider.setStatusCallback()` replays `lastStatus` on registration to fix mount-order race conditions
+- Canvas and all tools remain fully interactive while the badge is visible (`pointer-events-none`)
 
 **13. Board Access Control**
 - Any authenticated user accesses the same board
@@ -821,6 +836,8 @@ CollabBoard is a **production-quality, self-hosted collaborative whiteboard** bu
 **Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. **Shape rotation** (sticky notes, rectangles, circles) via a drag handle that writes atomically to the Yjs document and syncs to all peers. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
 
 **The AI Board Agent** is fully implemented: a floating chat UI backed by `app/api/ai/route.ts` that routes simple commands to Claude Haiku and complex templates (SWOT, Retrospective, User Journey) to Claude Sonnet. The system prompt and tool schema are ephemerally cached to cut TTFT. Six tools cover creation, bulk creation, updates, deletion, grid arrangement, and frame auto-sizing. All changes are applied atomically via `lib/ai-executor.ts` inside a single `ydoc.transact`, broadcasting to all peers instantly.
+
+**Graceful disconnect/reconnect handling** is implemented: a non-blocking floating badge (dark pill with a pulsing amber dot, WifiOff icon, and "Reconnecting…" text) appears whenever the connection drops. The signal comes from both `window` online/offline events (reliable for DevTools Network throttling) and the Supabase Realtime channel subscription status. The provider stores the last known status and replays it to any late-registering React callback, eliminating the singleton/mount-order race condition. A Vitest test suite (`npm test`) covers all three critical paths.
 
 **Most impactful next features** in priority order:
 

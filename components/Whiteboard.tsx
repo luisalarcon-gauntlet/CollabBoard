@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
-import { sharedLayers, getAwareness, ensurePersistence, ydoc } from "@/lib/yjs-store";
+import { sharedLayers, getAwareness, ensurePersistence, ydoc, setConnectionStatusCallback } from "@/lib/yjs-store";
+import type { ConnectionStatus } from "@/lib/yjs-store";
 import type {
   LineLayer,
   LayerData,
@@ -40,6 +41,7 @@ import {
   HelpCircle,
   Spline,
   Frame as FrameIcon,
+  WifiOff,
 } from "lucide-react";
 import styles from "./Whiteboard.module.css";
 
@@ -298,6 +300,18 @@ function WhiteboardInner() {
   const [showHelp, setShowHelp] = useState(false);
   const showHelpRef = useRef(false);
   showHelpRef.current = showHelp;
+
+  // Connection status badge
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connected");
+  const onStatusChange = useCallback((status: ConnectionStatus) => {
+    setConnectionStatus(status);
+  }, []);
+  useEffect(() => {
+    setConnectionStatusCallback(onStatusChange);
+    return () => {
+      setConnectionStatusCallback(null);
+    };
+  }, [onStatusChange]);
 
   // ── Connector tool state ─────────────────────────────────────────────────
 
@@ -1430,6 +1444,21 @@ function WhiteboardInner() {
 
       {/* Help modal */}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+
+      {/* Reconnecting badge — non-blocking, floats above canvas */}
+      {connectionStatus === "disconnected" && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 pointer-events-none select-none">
+          <div className="flex items-center gap-2.5 rounded-full bg-slate-900/90 backdrop-blur-sm pl-3.5 pr-5 py-2.5 text-sm font-medium text-white shadow-2xl ring-1 ring-white/10">
+            {/* Pulsing status dot */}
+            <span className="relative flex size-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+              <span className="relative inline-flex size-2 rounded-full bg-amber-400" />
+            </span>
+            <WifiOff size={13} className="text-amber-300 shrink-0" />
+            <span className="tracking-wide text-slate-100">Reconnecting…</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

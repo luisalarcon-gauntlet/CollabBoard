@@ -1,6 +1,7 @@
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { SupabaseYjsProvider } from "./supabase-yjs-provider";
+import type { ConnectionStatus } from "./supabase-yjs-provider";
 import { supabase } from "./supabase";
 
 const ROOM_ID = "collab-board-main";
@@ -138,3 +139,16 @@ export function getAwareness(): Awareness | null {
 export function ensurePersistence(): void {
   getProvider();
 }
+
+/**
+ * Register a callback that fires whenever the Realtime connection status changes.
+ * Pass `null` to unregister. Safe to call from a React effect — the provider
+ * stores only the latest reference so there are no memory leaks or stale closures.
+ */
+export function setConnectionStatusCallback(
+  cb: ((status: ConnectionStatus) => void) | null
+): void {
+  getProvider()?.setStatusCallback(cb ?? null);
+}
+
+export type { ConnectionStatus };

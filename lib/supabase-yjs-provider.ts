@@ -11,6 +11,8 @@ import * as Y from "yjs";
 import { Awareness, encodeAwarenessUpdate, applyAwarenessUpdate } from "y-protocols/awareness";
 import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 
+export type ConnectionStatus = "connected" | "disconnected";
+
 export interface SupabaseYjsProviderOptions {
   /** Room / channel identifier */
   roomId: string;
@@ -22,9 +24,11 @@ export interface SupabaseYjsProviderOptions {
   roomColumn?: string;
   /** How often (ms) to persist the full doc to the DB. 0 = never auto-save. */
   saveInterval?: number;
+  /** Optional callback fired whenever the Realtime connection status changes. */
+  onStatusChange?: (status: ConnectionStatus) => void;
 }
 
-const DEFAULT_OPTS: Required<Omit<SupabaseYjsProviderOptions, "roomId">> = {
+const DEFAULT_OPTS: Required<Omit<SupabaseYjsProviderOptions, "roomId" | "onStatusChange">> = {
   tableName: "yjs_updates",
   columnName: "content",
   roomColumn: "room_id",
@@ -36,11 +40,14 @@ export class SupabaseYjsProvider {
   readonly awareness: Awareness;
 
   private supabase: SupabaseClient;
-  private opts: Required<SupabaseYjsProviderOptions>;
+  private opts: Required<Omit<SupabaseYjsProviderOptions, "onStatusChange">>;
   private channel: RealtimeChannel | null = null;
   private saveTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  private statusCallback: ((status: ConnectionStatus) => void) | null = null;
+  /** Tracks the most-recent status so late-registering callbacks get the current state. */
+  private lastStatus: ConnectionStatus = "connected";
 
   constructor(
     doc: Y.Doc,
@@ -49,11 +56,33 @@ export class SupabaseYjsProvider {
   ) {
     this.doc = doc;
     this.supabase = supabase;
-    this.opts = { ...DEFAULT_OPTS, ...options } as Required<SupabaseYjsProviderOptions>;
+    const { onStatusChange, ...rest } = options;
+    this.opts = { ...DEFAULT_OPTS, ...rest } as Required<Omit<SupabaseYjsProviderOptions, "onStatusChange">>;
+    this.statusCallback = onStatusChange ?? null;
 
     this.awareness = new Awareness(doc);
 
     this.init();
+  }
+
+  /**
+   * Register (or replace) the connection-status callback after construction.
+   * Immediately replays the last known status so late-registering React components
+   * are always in sync (fixes the singleton/mount-order race condition).
+   * Pass `null` to unregister.
+   */
+  setStatusCallback(cb: ((status: ConnectionStatus) => void) | null): void {
+    this.statusCallback = cb;
+    if (cb) cb(this.lastStatus);
+  }
+
+  /**
+   * Single path for emitting status changes: stores lastStatus for replay and
+   * notifies the current callback.
+   */
+  private emitStatus(status: ConnectionStatus): void {
+    this.lastStatus = status;
+    this.statusCallback?.(status);
   }
 
   /* ------------------------------------------------------------------ */
@@ -72,6 +101,8 @@ export class SupabaseYjsProvider {
 
     if (typeof window !== "undefined") {
       window.addEventListener("beforeunload", this.handleUnload);
+      window.addEventListener("offline", this.handleOffline);
+      window.addEventListener("online", this.handleOnline);
     }
   }
 
@@ -173,7 +204,17 @@ export class SupabaseYjsProvider {
           console.error("[SupabaseYjsProvider] bad awareness update:", e);
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          this.emitStatus("connected");
+        } else if (
+          status === "CLOSED" ||
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT"
+        ) {
+          this.emitStatus("disconnected");
+        }
+      });
   }
 
   /* ------------------------------------------------------------------ */
@@ -227,6 +268,19 @@ export class SupabaseYjsProvider {
     this.destroy();
   };
 
+  /**
+   * window "offline"/"online" events are the most reliable signal for DevTools
+   * network throttling and real connectivity changes. They fire immediately,
+   * whereas the WebSocket close can be delayed by OS-level buffering.
+   */
+  private handleOffline = () => {
+    this.emitStatus("disconnected");
+  };
+
+  private handleOnline = () => {
+    this.emitStatus("connected");
+  };
+
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -237,6 +291,8 @@ export class SupabaseYjsProvider {
 
     if (typeof window !== "undefined") {
       window.removeEventListener("beforeunload", this.handleUnload);
+      window.removeEventListener("offline", this.handleOffline);
+      window.removeEventListener("online", this.handleOnline);
     }
 
     this.channel?.unsubscribe();
