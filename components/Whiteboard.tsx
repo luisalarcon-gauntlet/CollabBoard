@@ -12,7 +12,9 @@ import type {
   CircleLayer,
   TextLayer,
   ConnectorLayer,
+  FrameLayer,
 } from "@/lib/yjs-store";
+import { getElementsInFrame } from "@/lib/utils";
 import { BoardTransformProvider, useBoardTransform } from "@/lib/board-transform";
 import { Avatars } from "./Avatars";
 import { CursorPresence } from "./CursorPresence";
@@ -22,6 +24,7 @@ import { ShapeCircle } from "./ShapeCircle";
 import { TextElement } from "./TextElement";
 import { LineElement } from "./LineElement";
 import { ConnectorElement, getLayerBounds } from "./ConnectorElement";
+import { FrameElement } from "./FrameElement";
 import { HelpModal } from "./HelpModal";
 import {
   StickyNote as StickyIcon,
@@ -36,6 +39,7 @@ import {
   MousePointer2,
   HelpCircle,
   Spline,
+  Frame as FrameIcon,
 } from "lucide-react";
 import styles from "./Whiteboard.module.css";
 
@@ -48,6 +52,8 @@ const DEFAULT_CIRCLE_SIZE  = 120;
 const DEFAULT_TEXT_WIDTH   = 200;
 const DEFAULT_TEXT_HEIGHT  = 40;
 const DEFAULT_LINE_LENGTH  = 160;
+const DEFAULT_FRAME_WIDTH  = 600;
+const DEFAULT_FRAME_HEIGHT = 400;
 const PASTE_OFFSET         = 20;
 
 const COLOR_PRESETS = [
@@ -92,14 +98,32 @@ function generateId(prefix: string) {
  * box contains (wx, wy), or null if none.  Reads from the live Y.Map so it
  * is always current even inside pointer-event handlers.
  */
+/**
+ * Two-pass hit test used by the connector tool.
+ *
+ * Pass 1 – concrete shapes (sticky, rect, circle, text).  Inner shapes have
+ *           visual priority over any frame that contains them, so we prefer
+ *           them as connection endpoints.
+ * Pass 2 – frames only, as a fallback when the pointer is over the frame
+ *           background or border but not over any contained shape.
+ *
+ * Lines are excluded from both passes (no meaningful center/edge point).
+ * Connectors are excluded (self-referential edge).
+ */
 function hitTestShapeLayers(wx: number, wy: number): string | null {
+  // Pass 1: non-frame shapes
   for (const [id, layer] of sharedLayers.entries()) {
-    if (!layer || layer.type === "connector" || layer.type === "line") continue;
+    if (!layer || layer.type === "connector" || layer.type === "line" || layer.type === "frame") continue;
     const bounds = getLayerBounds(layer);
     if (!bounds) continue;
-    if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) {
-      return id;
-    }
+    if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) return id;
+  }
+  // Pass 2: frames (lower priority so inner shapes are preferred)
+  for (const [id, layer] of sharedLayers.entries()) {
+    if (!layer || layer.type !== "frame") continue;
+    const bounds = getLayerBounds(layer);
+    if (!bounds) continue;
+    if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) return id;
   }
   return null;
 }
@@ -402,8 +426,21 @@ function WhiteboardInner() {
     const ids = new Set(selectedIdsRef.current);
     if (!ids.has(draggedId)) ids.add(draggedId);
 
-    const positions = new Map<string, { x: number; y: number; points?: [number, number][] }>();
+    // For any selected frame, also include its geometrically contained children
+    // so the whole group moves atomically. Use a snapshot of layers for containment check.
+    const layerSnapshot = new Map(sharedLayers.entries());
+    const allIds = new Set(ids);
     for (const id of ids) {
+      const layer = sharedLayers.get(id);
+      if (layer?.type === "frame") {
+        for (const childId of getElementsInFrame(id, layerSnapshot)) {
+          allIds.add(childId);
+        }
+      }
+    }
+
+    const positions = new Map<string, { x: number; y: number; points?: [number, number][] }>();
+    for (const id of allIds) {
       const layer = sharedLayers.get(id);
       if (!layer) continue;
       // Connectors are auto-routed — they have no independent position to drag
@@ -685,6 +722,8 @@ function WhiteboardInner() {
           sharedLayers.set(id, { ...layer, fill: color });
         } else if (layer.type === "sticky") {
           sharedLayers.set(id, { ...layer, bgColor: color });
+        } else if (layer.type === "frame") {
+          sharedLayers.set(id, { ...layer, backgroundColor: color });
         }
       }
     });
@@ -796,7 +835,17 @@ function WhiteboardInner() {
         e.preventDefault();
         const ids = selectedIdsRef.current;
         if (ids.size > 0) {
-          ydoc.transact(() => { for (const id of ids) sharedLayers.delete(id); });
+          const layerSnapshot = new Map(sharedLayers.entries());
+          const toDelete = new Set(ids);
+          for (const id of ids) {
+            const layer = sharedLayers.get(id);
+            if (layer?.type === "frame") {
+              for (const childId of getElementsInFrame(id, layerSnapshot)) {
+                toDelete.add(childId);
+              }
+            }
+          }
+          ydoc.transact(() => { for (const id of toDelete) sharedLayers.delete(id); });
           updateSelectedIds(new Set());
         }
         return;
@@ -934,6 +983,21 @@ function WhiteboardInner() {
     [viewportCenter, updateSelectedIds],
   );
 
+  const addFrame = useCallback(() => {
+    const { x, y } = viewportCenter();
+    const id = generateId("frame");
+    sharedLayers.set(id, {
+      type: "frame",
+      x: x - DEFAULT_FRAME_WIDTH / 2,
+      y: y - DEFAULT_FRAME_HEIGHT / 2,
+      width: DEFAULT_FRAME_WIDTH,
+      height: DEFAULT_FRAME_HEIGHT,
+      title: "Frame",
+      backgroundColor: "rgba(241, 245, 249, 0.7)",
+    });
+    updateSelectedIds(new Set([id]));
+  }, [viewportCenter, updateSelectedIds]);
+
   const resetView = useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -944,7 +1008,18 @@ function WhiteboardInner() {
   const deleteSelected = useCallback(() => {
     const ids = selectedIdsRef.current;
     if (ids.size === 0) return;
-    ydoc.transact(() => { for (const id of ids) sharedLayers.delete(id); });
+    const layerSnapshot = new Map(sharedLayers.entries());
+    const toDelete = new Set(ids);
+    // When deleting a frame, also delete all contained elements
+    for (const id of ids) {
+      const layer = sharedLayers.get(id);
+      if (layer?.type === "frame") {
+        for (const childId of getElementsInFrame(id, layerSnapshot)) {
+          toDelete.add(childId);
+        }
+      }
+    }
+    ydoc.transact(() => { for (const id of toDelete) sharedLayers.delete(id); });
     updateSelectedIds(new Set());
   }, [updateSelectedIds]);
 
@@ -974,19 +1049,21 @@ function WhiteboardInner() {
     .map((id) => layers.get(id))
     .filter(Boolean) as LayerData[];
 
-  const hasFillable    = selectedLayers.some((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky");
+  const hasFillable    = selectedLayers.some((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky" || l.type === "frame");
   const hasText        = selectedLayers.some((l) => l.type === "text");
   const hasStickyOrText = selectedLayers.some((l) => l.type === "sticky" || l.type === "text");
   const hasLine        = selectedLayers.some((l) => l.type === "line");
   const hasConnector   = selectedLayers.some((l) => l.type === "connector");
   const hasSelection   = selectedIds.size > 0;
 
-  const firstFillable = selectedLayers.find((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky");
+  const firstFillable = selectedLayers.find((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky" || l.type === "frame");
   const currentFillColor =
     firstFillable?.type === "sticky"
       ? (firstFillable as StickyLayer).bgColor ?? "#fffbeb"
       : firstFillable?.type === "rectangle" || firstFillable?.type === "circle"
       ? (firstFillable as RectangleLayer).fill ?? "#93c5fd"
+      : firstFillable?.type === "frame"
+      ? (firstFillable as FrameLayer).backgroundColor ?? "rgba(241, 245, 249, 0.7)"
       : "#ffffff";
 
   const firstText = selectedLayers.find((l) => l.type === "text") as TextLayer | undefined;
@@ -1009,12 +1086,15 @@ function WhiteboardInner() {
       : 14;
 
   // ── Partition layer entries for z-order rendering ───────────────────────
-  // Connectors render first (lowest DOM order = lowest z-index) so they appear
-  // behind Sticky Notes and Shapes but above the canvas background.
+  // Rendering order (bottom to top):
+  //   1. Frames       — always at the very bottom
+  //   2. Connectors   — above frames, behind all shapes
+  //   3. All others   — sticky notes, rectangles, circles, text, lines
 
   const layerEntries = Array.from(layers.entries());
+  const frameEntries     = layerEntries.filter(([, l]) => l?.type === "frame");
   const connectorEntries = layerEntries.filter(([, l]) => l?.type === "connector");
-  const shapeEntries     = layerEntries.filter(([, l]) => l?.type !== "connector");
+  const shapeEntries     = layerEntries.filter(([, l]) => l?.type !== "connector" && l?.type !== "frame");
 
   // ── Anchor computation for connector hover UI ───────────────────────────
 
@@ -1061,7 +1141,26 @@ function WhiteboardInner() {
         className={styles.worldTransform}
         style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
       >
-        {/* ── Connectors (lowest z-index, behind all shapes) ── */}
+        {/* ── Frames (very bottom, behind connectors and shapes) ── */}
+        {frameEntries.map(([id, layer]) => {
+          if (!layer || layer.type !== "frame") return null;
+          return (
+            <FrameElement
+              key={id}
+              id={id}
+              layer={layer as FrameLayer}
+              selected={selectedIds.has(id)}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta}
+              onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld}
+              getScreenPos={getScreenPos}
+            />
+          );
+        })}
+
+        {/* ── Connectors (above frames, behind shapes) ── */}
         {connectorEntries.map(([id, layer]) => {
           if (!layer || layer.type !== "connector") return null;
           const conn = layer as ConnectorLayer;
@@ -1253,6 +1352,9 @@ function WhiteboardInner() {
         </button>
         <button type="button" onClick={() => addLine("arrow")} className={`${styles.toolbarButton} ${styles.addArrowButton}`} title="Add Arrow">
           <MoveUpRight size={20} className={styles.arrowIcon} /><span className={styles.buttonLabel}>Arrow</span>
+        </button>
+        <button type="button" onClick={addFrame} className={`${styles.toolbarButton} ${styles.addFrameButton}`} title="Add Frame">
+          <FrameIcon size={20} /><span className={styles.buttonLabel}>Frame</span>
         </button>
 
         {/* Formatting — only shown when something is selected */}

@@ -87,13 +87,24 @@ export type ConnectorLayer = {
   endpoints: "none" | "arrow" | "dot";
 };
 
+export type FrameLayer = {
+  type: "frame";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  title: string;
+  backgroundColor: string;
+};
+
 export type LayerData =
   | StickyLayer
   | RectangleLayer
   | CircleLayer
   | TextLayer
   | LineLayer
-  | ConnectorLayer;
+  | ConnectorLayer
+  | FrameLayer;
 
 /** The shared Y.Map that stores all whiteboard layers. */
 export const sharedLayers = ydoc.getMap<LayerData>("layers");

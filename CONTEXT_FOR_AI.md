@@ -1,12 +1,14 @@
 # CollabBoard — Full Project Context for AI
 
 > This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
+>
+> **Last updated:** Feb 2026 — reflects Frames feature and connector-to-frame support.
 
 ---
 
 ## 1. What Is CollabBoard?
 
-CollabBoard is a **real-time collaborative whiteboard web application** — think Miro or FigJam, but self-hosted and built from scratch. Multiple users can join the same board simultaneously and see each other's cursors, create sticky notes, draw shapes, add text, draw lines/arrows, connect shapes with smart connectors, pan/zoom the infinite canvas, and have all changes persist across sessions.
+CollabBoard is a **real-time collaborative whiteboard web application** — think Miro or FigJam, but self-hosted and built from scratch. Multiple users can join the same board simultaneously and see each other's cursors, create sticky notes, draw shapes, add text, draw lines/arrows, connect shapes with smart connectors, organize content in **Frames**, pan/zoom the infinite canvas, and have all changes persist across sessions.
 
 The core goal is bulletproof multiplayer sync without any third-party sync service (no Liveblocks, no PartyKit) — everything is self-hosted using Yjs + Supabase. The project targets an enterprise use case (authenticated users only, with Supabase Row Level Security).
 
@@ -46,16 +48,21 @@ CollabBoard/
 │
 ├── components/
 │   ├── Whiteboard.tsx            # ★ Core component — canvas, toolbar, pan/zoom, layer rendering
+│   ├── Whiteboard.module.css
+│   ├── FrameElement.tsx          # ★ Frame — large organizational container with title, draggable border, resize
+│   ├── FrameElement.module.css
 │   ├── StickyNote.tsx            # Sticky note — drag, resize, inline text edit, font size, bg color
+│   ├── StickyNote.module.css
 │   ├── ShapeRectangle.tsx        # Rectangle shape — drag, resize, fill color
+│   ├── ShapeRectangle.module.css
 │   ├── ShapeCircle.tsx           # Circle/ellipse shape — drag, resize, fill color
+│   ├── ConnectorElement.tsx      # ★ Smart connector — edge-to-edge routing between two named layers
+│   ├── ConnectorElement.module.css
 │   ├── TextElement.tsx           # Standalone text — drag, resize, inline editing, font size, color
 │   ├── LineElement.tsx           # Line/arrow — endpoint drag, multi-point, stroke color
-│   ├── ConnectorElement.tsx      # ★ Smart connector — edge-to-edge routing between two named layers
 │   ├── HelpModal.tsx             # Keyboard shortcut reference modal (? key)
 │   ├── Avatars.tsx               # Shows avatars/initials of connected users (top-left)
-│   ├── CursorPresence.tsx        # Renders remote user cursors with name labels
-│   └── *.module.css              # One CSS module per component
+│   └── CursorPresence.tsx        # Renders remote user cursors with name labels
 │
 ├── lib/
 │   ├── supabase.ts               # Supabase client singleton
@@ -64,7 +71,7 @@ CollabBoard/
 │   ├── useYjsStore.ts            # React hook — subscribes to Yjs layers map
 │   ├── useAwareness.ts           # React hook — returns remote users + cursor positions
 │   ├── board-transform.tsx       # React context for pan/zoom, tool mode, coordinate conversion
-│   └── utils.ts                  # cn() class-name helper
+│   └── utils.ts                  # cn() class-name helper + getElementsInFrame() geometry utility
 │
 ├── supabase/
 │   └── schema.sql                # DB schema: yjs_updates table, RLS policies, Realtime pub
@@ -77,6 +84,7 @@ CollabBoard/
 ├── components.json               # shadcn/ui config
 ├── PROJECT.md                    # Dev principles
 ├── README.md                     # User-facing project README
+├── CONTEXT_FOR_AI.md             # ← this file
 └── DEPLOY.md                     # Deployment guide (Vercel + Supabase)
 ```
 
@@ -150,11 +158,12 @@ type LineLayer = {
   variant: "straight" | "arrow";
 };
 
-// Smart connector — no x/y; geometry is always derived from fromId/toId bboxes
+// Smart connector — no x/y; geometry is always derived from fromId/toId bboxes.
+// fromId/toId can reference ANY layer type including FrameLayer.
 type ConnectorLayer = {
   type: "connector";
-  fromId: string;   // ID of source layer
-  toId: string;     // ID of target layer
+  fromId: string;   // ID of source layer (any type except connector)
+  toId: string;     // ID of target layer (any type except connector)
   label?: string;   // optional midpoint label
   style: "straight" | "curved" | "elbow";
   stroke: {
@@ -165,12 +174,25 @@ type ConnectorLayer = {
   endpoints: "none" | "arrow" | "dot";
 };
 
+// Organizational container — groups elements geometrically.
+// Children are NOT stored inside FrameLayer; containment is determined at
+// runtime via bounding-box geometry in getElementsInFrame().
+type FrameLayer = {
+  type: "frame";
+  x: number; y: number;
+  width: number; height: number;  // default 600×400
+  title: string;                  // editable label (double-click the title bar)
+  backgroundColor: string;        // default "rgba(241, 245, 249, 0.7)"
+};
+
 type LayerData =
   | StickyLayer | RectangleLayer | CircleLayer
-  | TextLayer | LineLayer | ConnectorLayer;
+  | TextLayer | LineLayer | ConnectorLayer | FrameLayer;
 ```
 
 **Important:** `ConnectorLayer` intentionally has **no `x` or `y`** fields — its geometry is always recomputed from the live bounding boxes of `fromId` / `toId`, so it never goes stale when objects are moved or resized.
+
+**Important:** `FrameLayer` children are **not stored inside the frame object**. Containment is computed dynamically at drag-start / deletion time by `getElementsInFrame()` using bounding-box intersection. This means a child can visually "leave" a frame just by being dragged out, with zero schema migration.
 
 All mutations are wrapped in `ydoc.transact()` to produce a single undo step and avoid double-writes.
 
@@ -230,7 +252,7 @@ type ToolMode = "select" | "hand" | "connector";
 |------|-----------|
 | `select` | Click/drag on empty canvas starts marquee selection. Objects are interactive. |
 | `hand` | All pointer-downs pan the canvas. A full-viewport overlay blocks object interaction. |
-| `connector` | A full-viewport overlay captures all pointer events for drawing connectors. Hovering a shape shows anchor points. Dragging from one shape to another creates a `ConnectorLayer` in the Y.Map. |
+| `connector` | A full-viewport overlay captures all pointer events for drawing connectors. Hovering a shape or frame shows anchor points. Dragging from one layer to another creates a `ConnectorLayer` in the Y.Map. |
 
 **Space bar** — held from any tool mode (including `connector`) applies a temporary hand mode overlay. Critically, `toolMode` does NOT change when Space is held — only `isSpaceDown` state flips. The hand overlay then captures pan events. The connector overlay is hidden while Space is held (`isConnectorMode = toolMode === "connector" && !isSpaceDown`).
 
@@ -241,12 +263,19 @@ type ToolMode = "select" | "hand" | "connector";
 The most complex rendering component. Key design decisions:
 
 **Edge-to-Edge Routing (`rectEdgePoint`):**
-Casts a parametric ray from the shape center toward the opposing shape center, evaluates `t` for all four rectangle edges, picks the smallest positive `t` that lands on the perimeter. Result: the connector starts and ends exactly on the shape boundary, never overlapping the fill.
+Casts a parametric ray from the shape center toward the opposing shape center, evaluates `t` for all four rectangle edges, picks the smallest positive `t` that lands on the perimeter. Result: the connector starts and ends exactly on the layer boundary — works for shapes **and frames**.
 
 **Three routing styles:**
 - `straight` — direct line between the two perimeter points
 - `curved` — cubic Bézier; control points are placed in the outward-normal direction of each exit/entry edge at a distance proportional to 40% of inter-shape distance (min 60 px). The tangent is therefore always aligned with the edge.
 - `elbow` — three-segment Manhattan path. Exit direction determines H→V→H or V→H→V routing.
+
+**`getLayerBounds(layer)`** — exported from `ConnectorElement.tsx`. Handles all layer types:
+- `connector` → returns `null` (no bounding rect)
+- `line` → bounding rect of all points
+- all others (including `frame`) → `{ x, y, width, height }` directly
+
+**Connector targets:** Connectors can attach to **any** layer type that has a bounding box (`sticky`, `rectangle`, `circle`, `text`, `line`, `frame`). The frame's visible border is the connection boundary.
 
 **Arrowhead:**
 For `endpoints: "arrow"`, a filled triangle is computed at the target point oriented along the direction the connector arrives (the `arrowNx, arrowNy` unit vector, edge-dependent for curved/elbow styles).
@@ -263,12 +292,62 @@ A wide transparent stroke (`pointer-events: stroke`) serves as the hit area. Cli
 **Orphan cleanup:**
 A `sharedLayers.observe` listener in `Whiteboard` runs after every Y.Map transaction. It finds any connectors whose `fromId` or `toId` has been deleted and removes them in a new `ydoc.transact`. This runs in the same event loop tick as the deletion, so peers never see a dangling connector.
 
-**Z-index management:**
-Layer entries are split before rendering:
-1. `connectorEntries` rendered **first** → lowest DOM z-index (behind all shapes)
-2. `shapeEntries` rendered **after** → appear above connectors
+### 4.7 Frames (`components/FrameElement.tsx`)
 
-### 4.7 Database Schema
+Frames are large organizational containers that group content visually and structurally.
+
+**Architecture decisions:**
+- Children are **not stored in the frame object**. The `getElementsInFrame(frameId, allLayers)` helper in `lib/utils.ts` computes containment at runtime using full bounding-box containment (`child.x1 >= frame.x && child.y1 >= frame.y && child.x2 <= frame.x2 && child.y2 <= frame.y2`).
+- Frame nesting is **disabled** — `getElementsInFrame` skips any layer with `type === "frame"` to prevent recursive/circular movement.
+- `getElementsInFrame` also skips `type === "connector"` (connectors are auto-routed, not independently positioned).
+
+**Pointer-events strategy:**
+- `.frameContainer` is `pointer-events: none` — the frame background never blocks clicks on contained shapes.
+- The **title bar** and **four edge strips** (8px each, top/bottom/left/right) are individually set to `pointer-events: auto` — these are the draggable areas.
+- Only the frame's border/title is interactive; clicking anywhere inside the frame body hits the shapes underneath.
+
+**Z-index containment:**
+- `.frameContainer` has `z-index: 0` which creates an isolated CSS stacking context. This confines all child elements (title, edges, resize handles at `z-index: 10`) within the frame's own context. Frames always stay below shapes and connectors in the visual stack.
+- Frames are rendered **first** in the DOM (before connectors and shapes), so they are always the bottommost visual layer.
+
+**Batch move (atomic):**
+When a frame is dragged, `handleDragStart` calls `getElementsInFrame` and adds all contained children to the drag position map. `handleDragDelta` then moves the frame **and** all children together in a single `ydoc.transact`. This is CRDT-safe and atomic for all peers.
+
+**Cascading deletion:**
+When a frame is deleted (toolbar button or `Delete`/`Backspace`), `getElementsInFrame` is called to collect all contained children. The frame and all children are deleted in a single `ydoc.transact`. Connectors attached to deleted layers are cleaned up by the orphan cleanup observer.
+
+**Resizing:**
+Resize handles appear at the four corners when selected. Resizing changes the frame's `width`/`height` only — it does NOT move or scale children (children remain at their world coordinates; containment is re-evaluated dynamically).
+
+**Title editing:**
+Double-clicking the title bar enters an inline `<input>` edit mode. The title is written to `sharedLayers` on blur or Enter/Escape.
+
+**Connector targeting:**
+The connector tool's `hitTestShapeLayers` uses a **two-pass strategy**:
+1. Pass 1: concrete shapes (non-frame, non-connector, non-line) — preferred targets.
+2. Pass 2: frames — fallback if the pointer is over frame background/border but no inner shape.
+
+This means hovering over a shape inside a frame correctly targets the shape, not the frame.
+
+### 4.8 Z-Order Rendering (DOM layering)
+
+All layer elements are absolutely positioned inside a single `worldTransform` div. DOM order determines visual stacking (later = in front). The rendering partition order is:
+
+1. **Frames** (`type === "frame"`) — rendered first → always at the very bottom
+2. **Connectors** (`type === "connector"`) — rendered second → above frames, behind all shapes
+3. **All other shapes** (sticky, rectangle, circle, text, line) — rendered last → topmost
+
+This ordering is enforced in `Whiteboard.tsx`:
+```typescript
+const frameEntries     = layerEntries.filter(([, l]) => l?.type === "frame");
+const connectorEntries = layerEntries.filter(([, l]) => l?.type === "connector");
+const shapeEntries     = layerEntries.filter(([, l]) => l?.type !== "connector" && l?.type !== "frame");
+// Rendered: frameEntries → connectorEntries → shapeEntries
+```
+
+Within each group, layers render in `Y.Map` insertion order (no user-controllable z-ordering yet).
+
+### 4.9 Database Schema
 
 ```sql
 -- supabase/schema.sql
@@ -307,7 +386,7 @@ The brain of the UI. Key responsibilities:
 **Pointer event handling:**
 - `pointerdown` on empty canvas (select mode) → start marquee drag
 - `pointerdown` on empty canvas (hand mode) → start pan drag
-- Connector overlay (connector mode) → drag from shape to shape
+- Connector overlay (connector mode) → drag from shape/frame to shape/frame
 - `pointermove` → update pan / marquee / awareness cursor
 - `wheel` → zoom toward cursor (no-op if help modal is open)
 
@@ -317,14 +396,15 @@ The brain of the UI. Key responsibilities:
 - `Escape` → in connector mode: cancel draft + return to select; otherwise: deselect all
 
 **Layer rendering (z-order):**
-1. ConnectorElements (first = lowest z-index)
-2. All other layer types (StickyNote, ShapeRectangle, etc.)
+1. FrameElements (lowest DOM position → visually at the bottom)
+2. ConnectorElements (above frames, below all shapes)
+3. All other layer types (StickyNote, ShapeRectangle, etc.)
 
 **Connector-specific UI:**
 - Connector overlay div (z-index 51) captures all pointer events when `isConnectorMode`
-- 4 pulsing anchor dots rendered in world-space over the hovered shape
+- 4 pulsing anchor dots rendered in world-space over the hovered shape or frame
 - Dashed blue preview line rendered during drag
-- On pointer-up over a different shape: creates `ConnectorLayer` in `sharedLayers`
+- On pointer-up over a different layer: creates `ConnectorLayer` in `sharedLayers`
 
 **Orphan cleanup:**
 ```typescript
@@ -335,7 +415,7 @@ sharedLayers.observe(() => {
 ```
 
 **Formatting panel (context-sensitive, shown in toolbar when items are selected):**
-- Fill color — rectangles, circles, sticky notes
+- Fill color — rectangles, circles, sticky notes, **frames** (updates `backgroundColor`)
 - Text color — text elements
 - Stroke color — lines/arrows
 - Connector color, routing style (Straight/Curved/Elbow), endpoint style (Arrow/Dot/None) — connectors
@@ -351,19 +431,40 @@ sharedLayers.observe(() => {
 | `Space` (hold) | Temporary pan (all modes) |
 | `Esc` | Cancel connector draft / deselect all / exit connector mode |
 | `⌘A` | Select all layers |
-| `⌘D` | Duplicate selection (20 px offset; skips connectors) |
+| `⌘D` | Duplicate selection (20 px offset; skips connectors and frames) |
 | `⌘C` | Copy selection to in-memory clipboard (skips connectors) |
 | `⌘V` | Paste from clipboard (20 px offset, repeated pastes stack) |
-| `Delete` / `Backspace` | Delete selected layers (orphan connectors auto-cleaned) |
+| `Delete` / `Backspace` | Delete selected layers + any frame children; orphan connectors auto-cleaned |
 | `?` | Toggle help modal |
 
 **Help modal zoom-lock:** `handleWheel` checks `showHelpRef.current` before applying any zoom change, so scrolling while the help panel is open does nothing to the board.
+
+### `components/FrameElement.tsx`
+
+Exported: `FrameElement`, `FRAME_TITLE_HEIGHT` (= 28px, the height of the title bar above the frame body).
+
+The frame renders as:
+```
+[ title bar — draggable, pointer-events: auto         ]
+┌──────────────────────────────────────────────────────┐
+│ top edge strip (pointer-events: auto, 8px tall)      │
+│                                                      │
+│  frame body background (pointer-events: none)        │
+│  contained shapes render here in the DOM layer above │
+│                                                      │
+│ bottom edge strip (pointer-events: auto, 8px tall)   │
+└──────────────────────────────────────────────────────┘
+left/right edge strips (pointer-events: auto, 8px wide)
+[NW] [NE] [SW] [SE] resize handles (when selected, pointer-events: auto)
+```
+
+The `.frameContainer` div has `z-index: 0` to create an isolated stacking context — this permanently confines the `z-index: 10` resize handles within the frame's own visual layer, preventing them from appearing above shapes.
 
 ### `components/ConnectorElement.tsx`
 
 Exported: `ConnectorElement` (memo-wrapped), `getLayerBounds`, `LayerBounds`.
 
-`getLayerBounds(layer)` — computes `{ cx, cy, x1, y1, x2, y2 }` for any non-connector layer. Used both by `ConnectorElement` for routing and by `Whiteboard` for anchor point and hit-test computation.
+`getLayerBounds(layer)` — computes `{ cx, cy, x1, y1, x2, y2 }` for any non-connector layer. Used both by `ConnectorElement` for routing and by `Whiteboard` for anchor point and hit-test computation. **Handles `FrameLayer`** via the generic `x/y/width/height` path — connectors attach to the frame's actual border.
 
 Rendering layers (inside the SVG, from bottom to top):
 1. Blue glow path (when `selected`)
@@ -372,6 +473,12 @@ Rendering layers (inside the SVG, from bottom to top):
 4. Source endpoint dot (if `endpoints === "dot"`)
 5. Target arrowhead polygon (if `endpoints === "arrow"`) or dot
 6. Label `<text>` at midpoint with white paint-order stroke for legibility
+
+### `lib/utils.ts`
+
+Exports:
+- `cn(...classes)` — class-name joiner utility
+- `getElementsInFrame(frameId, allLayers)` — returns IDs of layers fully contained within a frame's bounding box. Skips connectors (no independent bbox) and other frames (prevents nesting/recursion). Uses **strict full containment**: `child.x1 >= frame.x && child.y1 >= frame.y && child.x2 <= frame.x+w && child.y2 <= frame.y+h`.
 
 ### `components/StickyNote.tsx`
 
@@ -439,9 +546,15 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | Lines | ✅ | Create, drag endpoints, stroke color |
 | Arrows | ✅ | Lines with arrowhead variant |
 | **Smart Connectors** | ✅ | Edge-to-edge routing, 3 styles, 3 endpoint types, label, color, orphan cleanup, z-ordering |
+| **Connector → Frame targeting** | ✅ | Connectors attach to any layer incl. frames; two-pass hit-test prioritises inner shapes |
 | Connector tool (C) | ✅ | Overlay, anchor dots, preview line, pointer-capture drag |
 | Connector formatting | ✅ | Color, routing style, endpoint style via toolbar panel |
 | Connector orphan cleanup | ✅ | Y.Map observer purges dangling connectors transactionally |
+| **Frames** | ✅ | Org containers with title, draggable border, resize, fill color |
+| **Frame batch move** | ✅ | Dragging a frame moves it + all fully-contained children atomically via `ydoc.transact` |
+| **Frame cascading delete** | ✅ | Deleting a frame deletes all contained children in one transaction |
+| **Frame z-index isolation** | ✅ | `z-index: 0` on container confines handles; frames always stay below shapes |
+| **Frame connector support** | ✅ | Frames are valid connector endpoints; hit-test prefers inner shapes over frame |
 | Infinite canvas pan | ✅ | Mouse drag on empty space (select or hand mode) |
 | Infinite canvas zoom | ✅ | Mouse wheel toward cursor; blocked while help modal is open |
 | Tool modes (Select / Hand / Connector) | ✅ | Toolbar buttons + V / H / C shortcuts |
@@ -449,9 +562,9 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | Multi-select | ✅ | Shift+click, marquee drag, ⌘A |
 | Marquee selection | ✅ | Drag on empty canvas, connectors excluded |
 | Batch drag | ✅ | All selected items move together, single `ydoc.transact` |
-| Duplicate | ✅ | ⌘D or toolbar; skips connectors (they reference IDs) |
+| Duplicate | ✅ | ⌘D or toolbar; skips connectors and frames |
 | Copy / Paste | ✅ | ⌘C / ⌘V, in-memory clipboard; skips connectors |
-| Context-sensitive formatting | ✅ | Fill, text color, stroke, connector style, font size |
+| Context-sensitive formatting | ✅ | Fill (incl. frames), text color, stroke, connector style, font size |
 | Live cursor presence | ✅ | Remote cursors with username labels |
 | User avatar display | ✅ | Connected user list, top-left |
 | Keyboard shortcuts | ✅ | Full set including connector shortcuts |
@@ -476,8 +589,7 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 - Requires: board listing UI, per-board room IDs, URL routing (`/board/[id]`), `boards` table in Supabase
 
 **3. Layer Z-Ordering**
-- Layers render in Y.Map insertion order (no "bring to front / send to back")
-- Connectors are always behind shapes (hardcoded), but among shapes there is no user control
+- Within each rendering group (frames, connectors, shapes) layers render in Y.Map insertion order — no "bring to front / send to back"
 - Requires: storing a `z` / `order` field, or using `Y.Array` for ordered layer list
 
 **4. Freehand Drawing**
@@ -504,32 +616,35 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 **9. Minimap**
 - No overview minimap for navigating large boards
 
+**10. Frame Contents Shown on Title Bar**
+- Frame title bar could show a count badge ("3 items") for UX clarity
+
 ### 8.3 Lower Priority / Technical Debt
 
-**10. Per-User Cursor Colors**
+**11. Per-User Cursor Colors**
 - All remote cursors look identical except for the name label
 - Should assign each connected user a distinct colour
 
-**11. Reconnection & Offline UI**
+**12. Reconnection & Offline UI**
 - The provider handles offline edits (they queue up in Yjs) but shows no user-visible feedback
 - Should show a "reconnecting…" banner when the Realtime channel drops
 
-**12. Board Access Control**
+**13. Board Access Control**
 - Any authenticated user accesses the same board
 - For real enterprise use: boards need owners, collaborators, view-only guests
 
-**13. Performance on Large Boards**
+**14. Performance on Large Boards**
 - All layers rendered as DOM elements — no virtualization
 - Hundreds of elements would degrade performance
 - Mitigation: canvas-based rendering (Konva.js) or off-screen element virtualization
 
-**14. Mobile / Touch Support**
+**15. Mobile / Touch Support**
 - No pinch-to-zoom gesture handling; primarily desktop-oriented
 
-**15. Cursor Awareness Throttling**
+**16. Cursor Awareness Throttling**
 - Awareness broadcasts on every `pointermove` — should throttle to ~30 fps
 
-**16. AI Integration**
+**17. AI Integration**
 - Not implemented. Possible features: sticky note summarization, auto-layout, content generation via Claude 3.5 Sonnet tool-calling
 
 ---
@@ -576,13 +691,13 @@ npm run dev
 
 CollabBoard is a **production-quality, self-hosted collaborative whiteboard** built on Next.js 16 + Yjs + Supabase + Clerk. Yjs handles all CRDT state, a custom provider handles transport (Supabase Realtime broadcast) and persistence (Supabase Postgres), and React components read from Yjs and write back.
 
-**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, and **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
+**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
 
 **Most impactful next features** in priority order:
 
 1. **Undo/Redo** — `Y.UndoManager` already supported by Yjs; just needs wiring
 2. **Multiple boards** — URL-based routing, board listing UI
-3. **Layer z-ordering** — bring to front / send to back
+3. **Layer z-ordering** — bring to front / send to back within each visual group
 4. **Freehand drawing** — pencil tool
 5. **Editable connector labels** — inline editing for `ConnectorLayer.label`
 6. **Rich text in sticky notes** — `Y.Text` + y-prosemirror
@@ -591,4 +706,4 @@ CollabBoard is a **production-quality, self-hosted collaborative whiteboard** bu
 9. **Export to PNG/SVG**
 10. **AI integration** — Claude 3.5 Sonnet for summarization, layout, content generation
 
-The codebase is ~21 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.
+The codebase is ~22 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.

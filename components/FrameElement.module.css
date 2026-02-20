@@ -1,0 +1,159 @@
+/* Frame Element Styles */
+
+.frameContainer {
+  position: absolute;
+  /* z-index: 0 creates an isolated stacking context so every child element
+     (title bar, edge strips, resize handles) is confined within this context.
+     Without it, the resize handles' z-index: 10 would leak into the world
+     stacking context and float above sticky notes and shapes.
+     Because frames are rendered first in the DOM, z-index: 0 here still
+     keeps the entire frame behind all shape elements that follow in DOM order
+     (those have z-index: auto, which is treated as 0 but sorted by DOM position). */
+  z-index: 0;
+  /* pointer-events: none so the frame background doesn't block clicks on
+     contained elements. Only the title bar and edge strips opt back in. */
+  pointer-events: none;
+}
+
+/* ── Title bar ─────────────────────────────────────────────────────────── */
+
+.titleBar {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  cursor: grab;
+  border-radius: 6px 6px 0 0;
+  background: #e2e8f0;
+  border: 1.5px solid #94a3b8;
+  border-bottom: none;
+  gap: 6px;
+  user-select: none;
+}
+
+.titleBar:active {
+  cursor: grabbing;
+}
+
+.titleBarSelected {
+  background: #dbeafe;
+  border-color: #3b82f6;
+}
+
+.titleText {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titleInput {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1e293b;
+  font-family: inherit;
+  cursor: text;
+}
+
+/* ── Frame body ─────────────────────────────────────────────────────────── */
+
+.frameBody {
+  position: absolute;
+  top: 28px; /* matches TITLE_HEIGHT constant */
+  left: 0;
+  /* Background renders but has no pointer events (inherited: none). Only the
+     edge strips and resize handles opt in with pointer-events: auto. */
+  border: 1.5px solid #94a3b8;
+  border-radius: 0 4px 4px 4px;
+  box-sizing: border-box;
+}
+
+.frameBodySelected {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+/* ── Draggable edge strips ──────────────────────────────────────────────── */
+
+.edgeTop,
+.edgeBottom,
+.edgeLeft,
+.edgeRight {
+  position: absolute;
+  cursor: grab;
+}
+
+.edgeTop:active,
+.edgeBottom:active,
+.edgeLeft:active,
+.edgeRight:active {
+  cursor: grabbing;
+}
+
+.edgeTop {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.edgeBottom {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.edgeLeft {
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 8px;
+}
+
+.edgeRight {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+}
+
+/* ── Resize handles ─────────────────────────────────────────────────────── */
+
+.resizeHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background-color: white;
+  border: 2px solid #3b82f6;
+  border-radius: 50%;
+  z-index: 10;
+}
+
+.handleNW {
+  left: -6px;
+  cursor: nw-resize;
+}
+
+.handleNE {
+  right: -6px;
+  cursor: ne-resize;
+}
+
+.handleSW {
+  bottom: -6px;
+  left: -6px;
+  cursor: sw-resize;
+}
+
+.handleSE {
+  bottom: -6px;
+  right: -6px;
+  cursor: se-resize;
+}

@@ -20,7 +20,13 @@ export interface LayerBounds {
   y2: number;
 }
 
-/** Compute the axis-aligned bounding box + center for any non-connector layer. */
+/**
+ * Compute the axis-aligned bounding box + center for any connectable layer.
+ * Returns null only for connector layers (no meaningful single bounding rect).
+ *
+ * FrameLayer is fully supported: its border rectangle is used as the connection
+ * boundary, so connectors attach to the frame's visible edges.
+ */
 export function getLayerBounds(layer: LayerData): LayerBounds | null {
   if (layer.type === "connector") return null;
 
@@ -39,7 +45,8 @@ export function getLayerBounds(layer: LayerData): LayerBounds | null {
     };
   }
 
-  // All remaining types have x, y, width?, height?
+  // sticky, rectangle, circle, text, frame — all carry x, y, width, height.
+  // For frame, width/height are required fields so no ?? fallback is needed.
   const w = (layer as { width?: number }).width ?? 0;
   const h = (layer as { height?: number }).height ?? 0;
   return {

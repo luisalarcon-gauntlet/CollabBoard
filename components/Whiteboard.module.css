@@ -153,6 +153,8 @@
 .addArrowButton     { background-color: #fff7ed; color: #7c2d12; }
 .addArrowButton:hover { background-color: #fed7aa; }
 .arrowIcon { transform: rotate(0deg); }
+.addFrameButton     { background-color: #f0fdf4; color: #166534; }
+.addFrameButton:hover { background-color: #dcfce7; }
 
 /* Action buttons */
 .duplicateButton { background-color: #eff6ff; color: #1d4ed8; }
