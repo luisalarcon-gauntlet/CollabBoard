@@ -1,14 +1,14 @@
 # CollabBoard — Full Project Context for AI
 
-> This document is written for an LLM to give it complete context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
+> This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
 
 ---
 
 ## 1. What Is CollabBoard?
 
-CollabBoard is a **real-time collaborative whiteboard web application** — think Miro or FigJam, but self-hosted and built from scratch. Multiple users can join the same board simultaneously and see each other's cursors, create sticky notes, draw shapes, add text and arrows, pan/zoom the infinite canvas, and have all changes persist across sessions. The core goal was bulletproof multiplayer sync without depending on any third-party sync service (e.g., no Liveblocks, no PartyKit) — everything is self-hosted using Yjs + Supabase.
+CollabBoard is a **real-time collaborative whiteboard web application** — think Miro or FigJam, but self-hosted and built from scratch. Multiple users can join the same board simultaneously and see each other's cursors, create sticky notes, draw shapes, add text, draw lines/arrows, connect shapes with smart connectors, pan/zoom the infinite canvas, and have all changes persist across sessions.
 
-The project was built as a Gauntlet challenge/hackathon project. It targets an enterprise use case (authenticated users only, with Supabase Row Level Security).
+The core goal is bulletproof multiplayer sync without any third-party sync service (no Liveblocks, no PartyKit) — everything is self-hosted using Yjs + Supabase. The project targets an enterprise use case (authenticated users only, with Supabase Row Level Security).
 
 ---
 
@@ -27,7 +27,7 @@ The project was built as a Gauntlet challenge/hackathon project. It targets an e
 | Type Safety | **TypeScript 5** (strict mode) | End-to-end types |
 | Component Primitives | **shadcn/ui** (New York style) | Accessible component library, not heavily used yet |
 
-**Key design decision:** There is NO third-party collaboration backend (no Liveblocks, no Ably, no Firebase). Everything runs on Supabase infrastructure. The Yjs provider is custom-built (`lib/supabase-yjs-provider.ts`).
+**Key design decision:** There is NO third-party collaboration backend. Everything runs on Supabase infrastructure. The Yjs provider is custom-built (`lib/supabase-yjs-provider.ts`).
 
 ---
 
@@ -35,34 +35,35 @@ The project was built as a Gauntlet challenge/hackathon project. It targets an e
 
 ```
 CollabBoard/
-├── app/                          # Next.js App Router
-│   ├── layout.tsx                # Root layout — wraps with ClerkProvider, Geist fonts
+├── app/
+│   ├── layout.tsx                # Root layout — ClerkProvider, Geist fonts
 │   ├── page.tsx                  # Landing page — auth gate, redirects to /board if signed in
 │   ├── globals.css               # Global CSS variables and resets
-│   ├── page.module.css           # Landing page styles
+│   ├── page.module.css
 │   └── board/
 │       ├── page.tsx              # Main board page — renders <Whiteboard />, Sign Out button
-│       └── page.module.css       # Board page styles
+│       └── page.module.css
 │
 ├── components/
 │   ├── Whiteboard.tsx            # ★ Core component — canvas, toolbar, pan/zoom, layer rendering
-│   ├── StickyNote.tsx            # Sticky note — drag, resize, inline text editing, font size, bg color
+│   ├── StickyNote.tsx            # Sticky note — drag, resize, inline text edit, font size, bg color
 │   ├── ShapeRectangle.tsx        # Rectangle shape — drag, resize, fill color
 │   ├── ShapeCircle.tsx           # Circle/ellipse shape — drag, resize, fill color
 │   ├── TextElement.tsx           # Standalone text — drag, resize, inline editing, font size, color
 │   ├── LineElement.tsx           # Line/arrow — endpoint drag, multi-point, stroke color
+│   ├── ConnectorElement.tsx      # ★ Smart connector — edge-to-edge routing between two named layers
 │   ├── HelpModal.tsx             # Keyboard shortcut reference modal (? key)
 │   ├── Avatars.tsx               # Shows avatars/initials of connected users (top-left)
 │   ├── CursorPresence.tsx        # Renders remote user cursors with name labels
 │   └── *.module.css              # One CSS module per component
 │
 ├── lib/
-│   ├── supabase.ts               # Supabase client singleton (env vars)
+│   ├── supabase.ts               # Supabase client singleton
 │   ├── supabase-yjs-provider.ts  # ★ Custom Yjs provider — Supabase Realtime + Postgres
 │   ├── yjs-store.ts              # Y.Doc singleton, sharedLayers Y.Map, all layer type definitions
 │   ├── useYjsStore.ts            # React hook — subscribes to Yjs layers map
 │   ├── useAwareness.ts           # React hook — returns remote users + cursor positions
-│   ├── board-transform.tsx       # React context for pan/zoom transforms, tool mode, coordinate conversion
+│   ├── board-transform.tsx       # React context for pan/zoom, tool mode, coordinate conversion
 │   └── utils.ts                  # cn() class-name helper
 │
 ├── supabase/
@@ -75,6 +76,7 @@ CollabBoard/
 ├── eslint.config.mjs
 ├── components.json               # shadcn/ui config
 ├── PROJECT.md                    # Dev principles
+├── README.md                     # User-facing project README
 └── DEPLOY.md                     # Deployment guide (Vercel + Supabase)
 ```
 
@@ -84,19 +86,17 @@ CollabBoard/
 
 ### 4.1 Authentication Flow (Clerk)
 
-1. User visits `/` — server component checks auth status via Clerk
-2. Unauthenticated → sees landing page with **Sign In** / **Sign Up** buttons (Clerk hosted UI)
-3. Authenticated → immediately redirected to `/board`
-4. `proxy.ts` (Next.js middleware) runs on every request and enforces auth on all routes except `/`, `/sign-in/*`, `/sign-up/*`
-5. Board page shows a **Sign Out** button (top-right corner)
+1. User visits `/` — server component checks auth via Clerk
+2. Unauthenticated → landing page with **Sign In** / **Sign Up** (Clerk hosted UI)
+3. Authenticated → redirected to `/board`
+4. `proxy.ts` (Next.js middleware) enforces auth on all routes except `/`, `/sign-in/*`, `/sign-up/*`
+5. Board page shows a **Sign Out** button (top-right)
 
-**Required env vars:**
-- `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-- `CLERK_SECRET_KEY`
+**Required env vars:** `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`
 
 ### 4.2 State Management — Yjs CRDT
 
-All board state lives in a **single `Y.Doc`** (Yjs document). This doc contains one shared structure:
+All board state lives in a **single `Y.Doc`**. It contains one shared structure:
 
 ```typescript
 // lib/yjs-store.ts
@@ -104,288 +104,324 @@ const ydoc = new Y.Doc();
 const sharedLayers = ydoc.getMap<LayerData>("layers");
 ```
 
-`sharedLayers` is a `Y.Map` where keys are unique layer IDs (e.g., `"sticky-1708123456789-abc123"`) and values are typed layer objects:
+`sharedLayers` is a `Y.Map` where keys are unique layer IDs (e.g., `"sticky-1708123456789-abc123"`) and values are typed layer objects. The complete union of all layer types is:
 
 ```typescript
 type StickyLayer = {
   type: "sticky";
-  x: number;
-  y: number;
+  x: number; y: number;
   width?: number;   // default 200
   height?: number;  // default 150
   text: string;
-  fontSize?: number;  // font size for text (default: 14)
-  bgColor?: string;   // background color (default: #fffbeb)
+  fontSize?: number;  // default 14
+  bgColor?: string;   // default "#fffbeb"
 };
 
 type RectangleLayer = {
   type: "rectangle";
-  x: number;
-  y: number;
-  width: number;    // default 120
-  height: number;   // default 120
-  fill?: string;    // default "#93c5fd" (light blue)
+  x: number; y: number;
+  width: number; height: number;  // default 120×120
+  fill?: string;  // default "#93c5fd"
 };
 
 type CircleLayer = {
   type: "circle";
-  x: number;
-  y: number;
-  width: number;    // default 120
-  height: number;   // default 120
-  fill?: string;    // default "#86efac" (light green)
+  x: number; y: number;
+  width: number; height: number;  // default 120×120
+  fill?: string;  // default "#86efac"
 };
 
 type TextLayer = {
   type: "text";
-  x: number;
-  y: number;
-  width: number;    // default 200
-  height: number;   // default 40
+  x: number; y: number;
+  width: number; height: number;  // default 200×40
   text: string;
-  fontSize: number; // default 16
+  fontSize: number;   // default 16
   fontWeight: string; // "normal" | "bold"
-  color: string;    // default "#1e293b"
+  color: string;      // default "#1e293b"
 };
 
 type LineLayer = {
   type: "line";
-  x: number;        // bounding-box top-left X (mirrors points)
-  y: number;        // bounding-box top-left Y (mirrors points)
+  x: number; y: number;  // bounding-box top-left (mirrors points)
   points: [number, number][];  // absolute world-space coords
-  color: string;    // default "#1e293b"
-  thickness: number; // default 2
+  color: string;      // default "#1e293b"
+  thickness: number;  // default 2
   variant: "straight" | "arrow";
 };
 
-type LayerData = StickyLayer | RectangleLayer | CircleLayer | TextLayer | LineLayer;
+// Smart connector — no x/y; geometry is always derived from fromId/toId bboxes
+type ConnectorLayer = {
+  type: "connector";
+  fromId: string;   // ID of source layer
+  toId: string;     // ID of target layer
+  label?: string;   // optional midpoint label
+  style: "straight" | "curved" | "elbow";
+  stroke: {
+    color: string;
+    width: number;
+    dashArray?: string;  // SVG stroke-dasharray, e.g. "6,3" (dashed), "2,4" (dotted)
+  };
+  endpoints: "none" | "arrow" | "dot";
+};
+
+type LayerData =
+  | StickyLayer | RectangleLayer | CircleLayer
+  | TextLayer | LineLayer | ConnectorLayer;
 ```
 
-Any component that mutates `sharedLayers` triggers a Yjs update, which is automatically broadcast to all connected peers via the custom provider. All multi-element mutations are wrapped in `ydoc.transact()` to produce a single undo step and avoid double-writes.
+**Important:** `ConnectorLayer` intentionally has **no `x` or `y`** fields — its geometry is always recomputed from the live bounding boxes of `fromId` / `toId`, so it never goes stale when objects are moved or resized.
+
+All mutations are wrapped in `ydoc.transact()` to produce a single undo step and avoid double-writes.
 
 ### 4.3 Custom Supabase Yjs Provider (`lib/supabase-yjs-provider.ts`)
 
-This is the most complex and critical piece of the system. It replaces standard Yjs providers (y-websocket, y-webrtc) with a custom Supabase-based transport.
-
-**Two responsibilities:**
+The most complex piece of the system. Replaces standard Yjs providers (y-websocket, y-webrtc).
 
 **A) Realtime sync (broadcast):**
-- On init, subscribes to a Supabase Realtime broadcast channel named after the `roomId`
-- Listens on two event types:
-  - `yjs-update` — Yjs document update deltas (binary, base64-encoded)
-  - `yjs-awareness` — Yjs awareness state changes (user presence, cursor positions)
-- When the local `Y.Doc` changes, broadcasts the encoded delta to all other clients
-- When a remote update arrives, applies it to the local doc via `Y.applyUpdate()`
+- Subscribes to a Supabase Realtime broadcast channel named after the `roomId`
+- Event types: `yjs-update` (doc deltas, base64-encoded binary) and `yjs-awareness` (presence)
+- Local changes → broadcast delta to all peers
+- Remote updates → `Y.applyUpdate()` on the local doc
 
 **B) Persistence (Postgres):**
-- On init, loads saved state from `yjs_updates` table (single row per `room_id`)
-- Applies the saved state to the local doc — board is restored from DB
-- Auto-saves every **5 seconds** if the doc has changed
-- Debounce-saves **1 second** after the last local change
+- On init: loads saved state from `yjs_updates` table, applies to local doc
+- Auto-saves every **5 seconds** if doc changed
+- Debounce-saves **1 second** after last local change
 - Saves on `window.beforeunload`
-- Yjs state is serialized to `Uint8Array` via `Y.encodeStateAsUpdate()`, then base64-encoded to store as TEXT in Postgres
+- State serialized via `Y.encodeStateAsUpdate()`, base64-encoded to TEXT in Postgres
 
-**Destroy lifecycle:**
-- Cleans up Supabase channel subscription
-- Clears save intervals
-- Removes doc/awareness listeners
-
-**Required env vars:**
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+**Required env vars:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
 ### 4.4 User Awareness & Presence
 
-Yjs has a built-in "awareness" protocol (`y-protocols/awareness`) for ephemeral, non-persisted user state. CollabBoard uses this for:
+Yjs awareness protocol (`y-protocols/awareness`) is used for ephemeral state:
+- **Who is connected** — name, avatar URL (from Clerk)
+- **Cursor position** — `{ x, y }` in world coordinates
 
-- **Who is connected** — name, avatar URL
-- **Cursor position** — `{ x: number, y: number }` in world coordinates
+Flow:
+1. On mount, local awareness state is set from Clerk user info
+2. On `pointermove` → cursor world position written to awareness
+3. On `pointerleave` → cursor set to `null`
+4. `useAwareness.ts` hook subscribes to changes, returns remote users array
+5. `CursorPresence.tsx` renders cursor SVG + name label per remote user
+6. `Avatars.tsx` renders avatar images or initials per connected user
 
-**How it works:**
-1. When the board mounts, the local user's awareness state is set with their Clerk user info (name, avatar)
-2. On `pointermove`, the cursor world position is written to awareness
-3. On `pointerleave`, the cursor is set to `null` (hides the cursor for others)
-4. `useAwareness.ts` hook listens to awareness changes and returns the array of remote users (excluding self)
-5. `CursorPresence.tsx` renders a cursor SVG + name label for each remote user
-6. `Avatars.tsx` renders avatar images or initials for connected users
-
-Awareness state is broadcast via the same Supabase Realtime channel as doc updates (different event type).
+Awareness is broadcast on the same Supabase Realtime channel as doc updates (different event type).
 
 ### 4.5 Pan/Zoom & Tool Mode System (`lib/board-transform.tsx`)
 
-The whiteboard uses an **infinite canvas** with pan and zoom. All layer coordinates are stored in **world space** and converted to **screen space** for rendering.
+Infinite canvas with world-space coordinates:
 
 ```typescript
-// Coordinate conversion
 screenToWorld(sx, sy) => { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom }
-worldToScreen(wx, wy) => { x: wx * zoom + pan.x, y: wy * zoom + pan.y }
+worldToScreen(wx, wy) => { x: wx * zoom + pan.x,    y: wy * zoom + pan.y }
 ```
 
-**Pan:** Mouse drag on empty canvas moves `pan.x` and `pan.y`
-**Zoom:** Mouse wheel changes zoom (clamped to 0.01–100), keeping the cursor point fixed
+A `transformRef` is kept in sync with current pan/zoom for use inside pointer event handlers (avoids stale closure issues).
 
-A `transformRef` is used in mouse event handlers (avoids stale closure issues with zoom/pan values).
+**Tool Mode** is part of `BoardTransformContext`:
 
-**Tool Mode** is now part of the `BoardTransformContext`:
-- `toolMode: "select" | "hand"` — current interaction mode
-- `setToolMode(mode)` — switch between modes
-- In **select** mode: pointer-down on empty canvas starts a marquee selection drag
-- In **hand** mode: all pointer-downs pan the canvas (object interaction is blocked by an overlay)
+```typescript
+type ToolMode = "select" | "hand" | "connector";
+```
 
-### 4.6 Database Schema
+| Mode | Behaviour |
+|------|-----------|
+| `select` | Click/drag on empty canvas starts marquee selection. Objects are interactive. |
+| `hand` | All pointer-downs pan the canvas. A full-viewport overlay blocks object interaction. |
+| `connector` | A full-viewport overlay captures all pointer events for drawing connectors. Hovering a shape shows anchor points. Dragging from one shape to another creates a `ConnectorLayer` in the Y.Map. |
+
+**Space bar** — held from any tool mode (including `connector`) applies a temporary hand mode overlay. Critically, `toolMode` does NOT change when Space is held — only `isSpaceDown` state flips. The hand overlay then captures pan events. The connector overlay is hidden while Space is held (`isConnectorMode = toolMode === "connector" && !isSpaceDown`).
+
+**Zoom** is blocked while the help modal is open (`showHelpRef.current` checked inside `handleWheel`).
+
+### 4.6 Smart Connectors (`components/ConnectorElement.tsx`)
+
+The most complex rendering component. Key design decisions:
+
+**Edge-to-Edge Routing (`rectEdgePoint`):**
+Casts a parametric ray from the shape center toward the opposing shape center, evaluates `t` for all four rectangle edges, picks the smallest positive `t` that lands on the perimeter. Result: the connector starts and ends exactly on the shape boundary, never overlapping the fill.
+
+**Three routing styles:**
+- `straight` — direct line between the two perimeter points
+- `curved` — cubic Bézier; control points are placed in the outward-normal direction of each exit/entry edge at a distance proportional to 40% of inter-shape distance (min 60 px). The tangent is therefore always aligned with the edge.
+- `elbow` — three-segment Manhattan path. Exit direction determines H→V→H or V→H→V routing.
+
+**Arrowhead:**
+For `endpoints: "arrow"`, a filled triangle is computed at the target point oriented along the direction the connector arrives (the `arrowNx, arrowNy` unit vector, edge-dependent for curved/elbow styles).
+
+**SVG layout:**
+The component renders as an absolutely-positioned SVG in the `worldTransform` div. Its bounds are computed from all significant path points plus padding. Paths are rebuilt in SVG-local coordinates (world coords minus SVG top-left offset).
+
+**React.memo:**
+The inner component is wrapped in `memo`. The parent (`Whiteboard`) passes `fromLayer` and `toLayer` as resolved props from `useYjsStore`. When either endpoint moves or resizes, `useYjsStore` updates → parent re-renders → new props → connector recalculates.
+
+**Pointer interaction:**
+A wide transparent stroke (`pointer-events: stroke`) serves as the hit area. Clicking triggers `onSelect`.
+
+**Orphan cleanup:**
+A `sharedLayers.observe` listener in `Whiteboard` runs after every Y.Map transaction. It finds any connectors whose `fromId` or `toId` has been deleted and removes them in a new `ydoc.transact`. This runs in the same event loop tick as the deletion, so peers never see a dangling connector.
+
+**Z-index management:**
+Layer entries are split before rendering:
+1. `connectorEntries` rendered **first** → lowest DOM z-index (behind all shapes)
+2. `shapeEntries` rendered **after** → appear above connectors
+
+### 4.7 Database Schema
 
 ```sql
 -- supabase/schema.sql
 CREATE TABLE yjs_updates (
   id         bigserial PRIMARY KEY,
   room_id    text UNIQUE NOT NULL,
-  content    text,                        -- base64-encoded Yjs state snapshot
+  content    text,  -- base64-encoded Yjs state snapshot
   created_at timestamptz DEFAULT now()
 );
 
--- Row Level Security
 ALTER TABLE yjs_updates ENABLE ROW LEVEL SECURITY;
-
--- Authenticated users: full read/write
-CREATE POLICY "Authenticated users can read" ON yjs_updates FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Authenticated users can read"   ON yjs_updates FOR SELECT TO authenticated USING (true);
 CREATE POLICY "Authenticated users can insert" ON yjs_updates FOR INSERT TO authenticated WITH CHECK (true);
 CREATE POLICY "Authenticated users can update" ON yjs_updates FOR UPDATE TO authenticated USING (true);
+CREATE POLICY "Anon users can read"            ON yjs_updates FOR SELECT TO anon USING (true);
+CREATE POLICY "Anon users can insert"          ON yjs_updates FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "Anon users can update"          ON yjs_updates FOR UPDATE TO anon WITH CHECK (true);
 
--- Anonymous users: also read/write (for client SDK with anon key)
-CREATE POLICY "Anon users can read" ON yjs_updates FOR SELECT TO anon USING (true);
-CREATE POLICY "Anon users can insert" ON yjs_updates FOR INSERT TO anon WITH CHECK (true);
-CREATE POLICY "Anon users can update" ON yjs_updates FOR UPDATE TO anon WITH CHECK (true);
-
--- Enable Realtime
 ALTER PUBLICATION supabase_realtime ADD TABLE yjs_updates;
 ```
 
-**Important note:** The `content` column is `TEXT` (not `BYTEA`). The app stores base64-encoded Yjs state. If someone created the table with `BYTEA`, they must run `ALTER TABLE yjs_updates ALTER COLUMN content TYPE text`.
-
-**Current room ID:** Hardcoded as `"collab-board-main"` in `lib/yjs-store.ts`. There is only one board for all users.
+**Note:** `content` is `TEXT` (base64), not `BYTEA`. Current room ID is hardcoded as `"collab-board-main"` in `lib/yjs-store.ts`.
 
 ---
 
 ## 5. Component Reference
 
-### `components/Whiteboard.tsx` — The Core Canvas
+### `components/Whiteboard.tsx` — Core Canvas
 
-This is the brain of the UI. Responsibilities:
+The brain of the UI. Key responsibilities:
 
-- **Renders the infinite canvas** — a `div` that fills the viewport, transformed via CSS `transform: translate(x, y) scale(zoom)`
-- **Pointer event handling:**
-  - `pointerdown` on empty canvas (select mode) → start marquee selection drag
-  - `pointerdown` on empty canvas (hand mode) → start pan drag
-  - `pointermove` → update pan/marquee + update awareness cursor position
-  - `pointerleave` → clear awareness cursor
-  - `wheel` → zoom toward cursor
-- **Tool mode toggle:** Select (V) and Hand (H) mode buttons in toolbar; Space bar held = temporary hand mode
-- **Layer rendering:** Reads `useYjsStore()`, renders `<StickyNote />`, `<ShapeRectangle />`, `<ShapeCircle />`, `<TextElement />`, or `<LineElement />` per layer
-- **Marquee selection:** Drag on empty canvas draws a selection rectangle; releases select all layers whose bounding box intersects. Shift+drag extends selection.
-- **Multi-select:** `selectedIds` is a `Set<string>`. Shift+click adds/removes from selection.
-- **Batch drag:** All selected items move together when any one is dragged. Uses `handleDragStart` / `handleDragDelta` / `handleDragEnd` pattern with `dragStartPositions` ref. Wrapped in `ydoc.transact()`.
-- **Context-sensitive formatting panel** (appears in toolbar when items are selected):
-  - **Fill color** palette (8 presets + hex input) for rectangles, circles, and sticky notes
-  - **Text color** palette for text elements
-  - **Stroke color** palette for lines/arrows
-  - **Font size** ±2 stepper for sticky notes and text elements
-- **Toolbar (bottom-center):**
-  - Select / Hand tool mode buttons
-  - Add Sticky Note, Rectangle, Circle, Text, Line, Arrow
-  - Formatting controls (context-sensitive, when selection exists)
-  - Duplicate button (when selection exists)
-  - Delete button (when selection exists)
-  - Reset View button
-- **Help button** (bottom-right, `?` key) — opens `<HelpModal />`
-- **Keyboard shortcuts:**
-  - `V` → select tool mode
-  - `H` → hand tool mode
-  - `Space` (hold) → temporary hand mode
-  - `Ctrl+A` → select all layers
-  - `Escape` → deselect all
-  - `Ctrl+D` → duplicate selection (with 20px offset)
-  - `Ctrl+C` → copy selection to in-memory clipboard
-  - `Ctrl+V` → paste from clipboard (with 20px offset, repeated pastes stack)
-  - `Delete` / `Backspace` → delete selected layers
-  - `?` → toggle help modal
-- **`<Avatars />`** rendered top-left
-- **`<CursorPresence />`** rendered as overlay (absolute positioned, pointer-events none)
-- **Hand-mode overlay** — a full-viewport div rendered in hand mode that captures all pointer events for panning, preventing accidental object interaction
-- Wrapped in `<BoardTransformProvider>`
+**Canvas & transforms:**
+- Renders an infinite canvas div transformed via `transform: translate(x, y) scale(zoom)`
+- All layer positions are world-space; CSS transform applies pan/zoom
+
+**Pointer event handling:**
+- `pointerdown` on empty canvas (select mode) → start marquee drag
+- `pointerdown` on empty canvas (hand mode) → start pan drag
+- Connector overlay (connector mode) → drag from shape to shape
+- `pointermove` → update pan / marquee / awareness cursor
+- `wheel` → zoom toward cursor (no-op if help modal is open)
+
+**Tool modes:**
+- `V` → select, `H` → hand, `C` → connector
+- Space (hold) → temporary hand from any mode, including connector
+- `Escape` → in connector mode: cancel draft + return to select; otherwise: deselect all
+
+**Layer rendering (z-order):**
+1. ConnectorElements (first = lowest z-index)
+2. All other layer types (StickyNote, ShapeRectangle, etc.)
+
+**Connector-specific UI:**
+- Connector overlay div (z-index 51) captures all pointer events when `isConnectorMode`
+- 4 pulsing anchor dots rendered in world-space over the hovered shape
+- Dashed blue preview line rendered during drag
+- On pointer-up over a different shape: creates `ConnectorLayer` in `sharedLayers`
+
+**Orphan cleanup:**
+```typescript
+sharedLayers.observe(() => {
+  // find connectors with missing fromId/toId
+  // delete them in a single ydoc.transact()
+});
+```
+
+**Formatting panel (context-sensitive, shown in toolbar when items are selected):**
+- Fill color — rectangles, circles, sticky notes
+- Text color — text elements
+- Stroke color — lines/arrows
+- Connector color, routing style (Straight/Curved/Elbow), endpoint style (Arrow/Dot/None) — connectors
+- Font size ±2 stepper — sticky notes and text elements
+
+**Keyboard shortcuts:**
+
+| Key | Action |
+|-----|--------|
+| `V` | Select tool |
+| `H` | Hand / pan tool |
+| `C` | Connector tool |
+| `Space` (hold) | Temporary pan (all modes) |
+| `Esc` | Cancel connector draft / deselect all / exit connector mode |
+| `⌘A` | Select all layers |
+| `⌘D` | Duplicate selection (20 px offset; skips connectors) |
+| `⌘C` | Copy selection to in-memory clipboard (skips connectors) |
+| `⌘V` | Paste from clipboard (20 px offset, repeated pastes stack) |
+| `Delete` / `Backspace` | Delete selected layers (orphan connectors auto-cleaned) |
+| `?` | Toggle help modal |
+
+**Help modal zoom-lock:** `handleWheel` checks `showHelpRef.current` before applying any zoom change, so scrolling while the help panel is open does nothing to the board.
+
+### `components/ConnectorElement.tsx`
+
+Exported: `ConnectorElement` (memo-wrapped), `getLayerBounds`, `LayerBounds`.
+
+`getLayerBounds(layer)` — computes `{ cx, cy, x1, y1, x2, y2 }` for any non-connector layer. Used both by `ConnectorElement` for routing and by `Whiteboard` for anchor point and hit-test computation.
+
+Rendering layers (inside the SVG, from bottom to top):
+1. Blue glow path (when `selected`)
+2. Wide transparent hit-area path (`pointer-events: stroke`)
+3. Main visible stroke (respects `dashArray`)
+4. Source endpoint dot (if `endpoints === "dot"`)
+5. Target arrowhead polygon (if `endpoints === "arrow"`) or dot
+6. Label `<text>` at midpoint with white paint-order stroke for legibility
 
 ### `components/StickyNote.tsx`
 
-- Absolutely positioned on the canvas at world coordinates
-- **Drag:** `pointerdown` on note body → batch drag via `onDragStart` / `onDragDelta` / `onDragEnd` callbacks
-- **Resize:** 4 corner handles, each with directional resize logic
-- **Text editing:** Double-click → shows `<textarea>`, Escape/Enter (without shift) → saves text to `sharedLayers`
-- **Selection:** Click → calls `onSelect(id, shiftKey)`; shows blue border ring when selected
-- **Configurable font size** via `layer.fontSize` (default: 14); adjusted from toolbar
-- **Configurable background color** via `layer.bgColor` (default: `#fffbeb`); adjusted from toolbar fill palette
-- Min size: 80×60px, Default size: 200×150px
+- Drag: batch drag via `onDragStart / onDragDelta / onDragEnd`
+- Resize: 4 corner handles with directional logic
+- Edit: double-click → `<textarea>`, Escape/Enter saves to `sharedLayers`
+- Selection: shows blue border ring; click calls `onSelect(shiftKey)`
+- Configurable: `fontSize` (default 14), `bgColor` (default `#fffbeb`)
+- Min size: 80×60 px
 
 ### `components/ShapeRectangle.tsx`
 
-- Same drag/resize/select pattern as StickyNote (uses batch drag callbacks)
-- No text content — just a colored rectangle
-- Configurable `fill` color (default: `#93c5fd`, light blue); adjusted from toolbar fill palette
-- Min size: 60×60px, Default size: 120×120px
+Same drag/resize/select pattern. Configurable `fill` (default `#93c5fd`). Min size 60×60 px.
 
 ### `components/ShapeCircle.tsx`
 
-- Same drag/resize/select pattern as ShapeRectangle
-- Renders as a circle/ellipse using `border-radius: 50%`
-- Configurable `fill` color (default: `#86efac`, light green); adjusted from toolbar fill palette
-- Min size: 60×60px, Default size: 120×120px
+Same as rectangle. `border-radius: 50%` makes it circular. Shift-constrained resize to square. Configurable `fill` (default `#86efac`).
 
 ### `components/TextElement.tsx`
 
-- Absolutely positioned standalone text element
-- Same drag/resize/select pattern (uses batch drag callbacks)
-- **Inline editing:** Double-click → contentEditable or textarea, Escape/Enter saves
-- **Configurable:** `fontSize`, `fontWeight`, `color` — all adjustable from toolbar panels
-- Default: 200×40px, fontSize 16, color `#1e293b`
+Same drag/resize/select pattern. Configurable `fontSize`, `fontWeight`, `color`. Default 200×40 px.
 
 ### `components/LineElement.tsx`
 
-- Renders an SVG line or arrow between two (or more) endpoints
-- Points stored as absolute world-space coordinates in `layer.points: [number, number][]`
-- `layer.x` / `layer.y` mirror the bounding-box top-left for consistent layer positioning
-- **Endpoint drag:** Individual endpoint handles can be dragged
-- **Whole-line drag:** Uses batch drag callbacks; all points are translated by the delta
-- **Variant:** `"straight"` (plain line) or `"arrow"` (arrowhead on end point)
-- **Configurable:** `color`, `thickness` — color adjustable from toolbar stroke palette
+SVG-based. Points stored as absolute world-space `[number, number][]`. Body drag routes through batch drag callbacks. Endpoint handles drag individual points. Variants: `"straight"` and `"arrow"` (arrowhead computed from last two points).
 
 ### `components/HelpModal.tsx`
 
-- Modal overlay showing all keyboard shortcuts organized by category: Tools, Selection, Edit, View
-- Triggered by `?` key or help button (bottom-right of canvas)
-- Closes on `Escape` or clicking outside the modal panel
-- Renders `<ShortcutRow>` sub-components with `<kbd>` styled key badges
+Sections: **Tools** (V, H, C, Space, Esc), **Selection** (⌘A, Shift+Click, Drag, Esc), **Connectors** (C, drag flow, anchor hints, Space pan, Esc cancel), **Edit** (⌘D, ⌘C, ⌘V, Del), **View** (Scroll, Reset, ?).
+
+Closes on Escape or click-outside. Does not block Whiteboard keyboard handlers (modal has its own `keydown` listener).
 
 ### `components/Avatars.tsx`
 
-- Reads `useAwareness()` for remote users
-- For each user: shows `<img>` if avatar URL present, else shows first letter of name
-- Positioned fixed top-left, stacked horizontally with slight overlap
+Reads `useAwareness()`. Shows `<img>` (avatar URL) or first letter of name per remote user. Fixed top-left, stacked with slight overlap.
 
 ### `components/CursorPresence.tsx`
 
-- Reads `useAwareness()` for remote users with cursor data
-- For each user: renders an SVG cursor icon + name label
-- Converts world cursor position to screen position via `worldToScreen()`
-- Pointer-events: none (doesn't block interaction)
+Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. Renders SVG cursor + name label per user. `pointer-events: none`.
 
 ---
 
-## 6. All Environment Variables
+## 6. Environment Variables
 
-| Variable | Where Set | Purpose |
-|---|---|---|
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | `.env.local` / Vercel | Clerk public key |
-| `CLERK_SECRET_KEY` | `.env.local` / Vercel | Clerk secret key (server-side only) |
-| `NEXT_PUBLIC_SUPABASE_URL` | `.env.local` / Vercel | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `.env.local` / Vercel | Supabase anon/public key |
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk public key |
+| `CLERK_SECRET_KEY` | Clerk secret key (server-side only) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
 
 ---
 
@@ -393,137 +429,117 @@ This is the brain of the UI. Responsibilities:
 
 | Feature | Status | Notes |
 |---|---|---|
-| User authentication | ✅ Complete | Clerk, protected routes, sign in/out |
-| Real-time collaboration (CRDT) | ✅ Complete | Yjs Y.Map, custom Supabase provider |
-| Board persistence | ✅ Complete | Auto-saves to Supabase Postgres every 5s |
-| Sticky notes | ✅ Complete | Create, drag, resize, inline text edit, font size, bg color, delete |
-| Rectangle shapes | ✅ Complete | Create, drag, resize, fill color, delete |
-| Circle/ellipse shapes | ✅ Complete | Create, drag, resize, fill color, delete |
-| Text elements | ✅ Complete | Create, drag, resize, inline edit, font size, text color, delete |
-| Lines | ✅ Complete | Create, drag endpoints, stroke color, thickness |
-| Arrows | ✅ Complete | Same as lines with arrowhead variant |
-| Infinite canvas pan | ✅ Complete | Mouse drag on empty space (select or hand mode) |
-| Infinite canvas zoom | ✅ Complete | Mouse wheel, zoom toward cursor |
-| Tool modes (Select / Hand) | ✅ Complete | Toolbar buttons + V/H keyboard shortcuts |
-| Space bar temporary pan | ✅ Complete | Hold Space for hand mode without switching permanently |
-| Multi-select | ✅ Complete | Shift+click, marquee drag, Ctrl+A |
-| Marquee selection | ✅ Complete | Drag on empty canvas to box-select multiple layers |
-| Batch drag (move multiple) | ✅ Complete | All selected items move together, single ydoc transaction |
-| Duplicate | ✅ Complete | Ctrl+D or toolbar button, 20px offset |
-| Copy / Paste | ✅ Complete | Ctrl+C / Ctrl+V, in-memory clipboard, repeated paste stacks |
-| Context-sensitive formatting | ✅ Complete | Fill color, text color, stroke color, font size — shown when relevant types selected |
-| Sticky note colors | ✅ Complete | `bgColor` field, 8 presets + hex input |
-| Sticky note font size | ✅ Complete | `fontSize` field, ±2 stepper in toolbar |
-| Live cursor presence | ✅ Complete | Remote cursors with username labels |
-| User avatar display | ✅ Complete | Connected user list, top-left |
-| Keyboard shortcuts | ✅ Complete | V, H, Space, Ctrl+A, Escape, Ctrl+D, Ctrl+C, Ctrl+V, Delete, ? |
-| Help modal | ✅ Complete | ? key or button opens shortcut reference |
-| Selection system | ✅ Complete | Click to select, Shift+click multi-select, visual ring indicator |
-| Reset view | ✅ Complete | Toolbar button resets pan+zoom |
-| Deployment guide | ✅ Complete | Vercel + Supabase documented in DEPLOY.md |
+| User authentication | ✅ | Clerk, protected routes, sign in/out |
+| Real-time collaboration (CRDT) | ✅ | Yjs Y.Map, custom Supabase provider |
+| Board persistence | ✅ | Auto-saves to Supabase Postgres every 5 s |
+| Sticky notes | ✅ | Create, drag, resize, edit, font size, bg color, delete |
+| Rectangle shapes | ✅ | Create, drag, resize, fill color, delete |
+| Circle/ellipse shapes | ✅ | Create, drag, resize, fill color, delete |
+| Text elements | ✅ | Create, drag, resize, edit, font size, text color, delete |
+| Lines | ✅ | Create, drag endpoints, stroke color |
+| Arrows | ✅ | Lines with arrowhead variant |
+| **Smart Connectors** | ✅ | Edge-to-edge routing, 3 styles, 3 endpoint types, label, color, orphan cleanup, z-ordering |
+| Connector tool (C) | ✅ | Overlay, anchor dots, preview line, pointer-capture drag |
+| Connector formatting | ✅ | Color, routing style, endpoint style via toolbar panel |
+| Connector orphan cleanup | ✅ | Y.Map observer purges dangling connectors transactionally |
+| Infinite canvas pan | ✅ | Mouse drag on empty space (select or hand mode) |
+| Infinite canvas zoom | ✅ | Mouse wheel toward cursor; blocked while help modal is open |
+| Tool modes (Select / Hand / Connector) | ✅ | Toolbar buttons + V / H / C shortcuts |
+| Space bar temporary pan | ✅ | Works from all tool modes including Connector |
+| Multi-select | ✅ | Shift+click, marquee drag, ⌘A |
+| Marquee selection | ✅ | Drag on empty canvas, connectors excluded |
+| Batch drag | ✅ | All selected items move together, single `ydoc.transact` |
+| Duplicate | ✅ | ⌘D or toolbar; skips connectors (they reference IDs) |
+| Copy / Paste | ✅ | ⌘C / ⌘V, in-memory clipboard; skips connectors |
+| Context-sensitive formatting | ✅ | Fill, text color, stroke, connector style, font size |
+| Live cursor presence | ✅ | Remote cursors with username labels |
+| User avatar display | ✅ | Connected user list, top-left |
+| Keyboard shortcuts | ✅ | Full set including connector shortcuts |
+| Help modal | ✅ | All shortcuts, includes Connector section |
+| Zoom locked during help modal | ✅ | `showHelpRef` checked in wheel handler |
+| Reset view | ✅ | Toolbar button resets pan + zoom |
+| Deployment guide | ✅ | Vercel + Supabase documented in DEPLOY.md |
 
 ---
 
 ## 8. Known Limitations & What Should Be Worked On Next
 
-### 8.1 High Priority — Core Missing Features
+### 8.1 High Priority
 
-**1. Multiple Boards / Room System**
-- Currently there is exactly **one hardcoded board** (`"collab-board-main"` in `lib/yjs-store.ts`)
-- Users should be able to create multiple boards, name them, share links to specific boards
-- Requires: a board listing UI, per-board room IDs, URL-based routing (e.g., `/board/[id]`)
-- Requires: a `boards` table in Supabase
+**1. Undo / Redo**
+- Yjs has built-in `Y.UndoManager` but it is not wired up
+- All mutations already use `ydoc.transact()` so each action will be a clean undo step
+- Requires: wiring `Y.UndoManager`, toolbar buttons, `⌘Z` / `⌘Shift+Z` shortcuts
 
-**2. Undo / Redo**
-- Yjs has built-in undo management (`Y.UndoManager`) but it is not wired up
-- `Y.UndoManager` tracks changes to specific shared types and can undo/redo them
-- Toolbar should have undo/redo buttons; keyboard shortcuts `Ctrl+Z` / `Ctrl+Shift+Z`
-- All mutations already use `ydoc.transact()` so each user action will be a clean single undo step
+**2. Multiple Boards / Room System**
+- Currently exactly **one hardcoded board** (`"collab-board-main"`)
+- Requires: board listing UI, per-board room IDs, URL routing (`/board/[id]`), `boards` table in Supabase
 
-**3. Layer Ordering (Z-index)**
-- All layers render in the order they appear in the Yjs map, which is insertion order
-- There is no "bring to front / send to back" functionality
-- Users cannot control which shape appears on top when they overlap
-- Requires: storing a `z` or `order` field in each layer, or using a `Y.Array` for ordered layer list
+**3. Layer Z-Ordering**
+- Layers render in Y.Map insertion order (no "bring to front / send to back")
+- Connectors are always behind shapes (hardcoded), but among shapes there is no user control
+- Requires: storing a `z` / `order` field, or using `Y.Array` for ordered layer list
 
 **4. Freehand Drawing**
-- Currently no freehand/pencil drawing tool
-- Would require a `Y.Array` of stroke points or a dedicated freehand layer type
-- This is the most-requested missing shape type for a whiteboard tool
+- No pencil/freehand tool
+- Requires: a new layer type with `Y.Array` of stroke points, or a dedicated freehand layer
 
-### 8.2 Medium Priority — UX Improvements
+### 8.2 Medium Priority
 
-**5. Text Formatting in Sticky Notes / Text Elements**
-- Currently a plain `<textarea>` / contentEditable — no markdown, no bold/italic
-- `fontWeight` field exists on `TextLayer` but is not surfaced in the formatting panel
-- Could integrate a rich text editor (e.g., Tiptap with `y-prosemirror`) for true collaborative inline editing
-- Note: concurrent edits to the same sticky note's `text` field are last-write-win, not character-level merge
+**5. Rich Text in Sticky Notes / Text Elements**
+- Plain `<textarea>` — no bold/italic/markdown
+- Concurrent edits to `text` field are last-write-wins (not character-level merge)
+- True collaborative text requires `Y.Text` + `y-prosemirror` / Tiptap (architecturally significant change)
 
-**6. Line Multi-point / Curve Support**
-- Lines currently support two endpoints; could extend to polylines or bezier curves
-- Routing arrows around shapes is a common feature in diagramming tools
+**6. Connector Labels (editable)**
+- `ConnectorLayer.label` field exists and renders, but there is no UI to set or edit it
+- Should add an inline double-click edit flow for connector labels
 
 **7. Image Upload / Embedding**
-- Users cannot add images to the board
-- Would require Supabase Storage for image hosting
+- No image layer type; would require Supabase Storage
 
 **8. Export / Share**
-- No way to export the board as PNG, SVG, or PDF
-- Could use `html2canvas` or similar to capture the canvas
+- No PNG / SVG / PDF export
 
 **9. Minimap**
 - No overview minimap for navigating large boards
-- Common in tools like Miro, helpful when board content is spread out
 
-### 8.3 Lower Priority — Technical Debt & Polish
+### 8.3 Lower Priority / Technical Debt
 
-**10. Per-User Sticky Note Cursors (Text Collaboration)**
-- If two users edit the same sticky note simultaneously, changes conflict (last-write-wins on the whole `text` field)
-- True character-level collaboration requires replacing the `text: string` field with a `Y.Text` type and using `y-prosemirror` or a similar binding
-- This is architecturally significant — would require refactoring how layer data is stored
+**10. Per-User Cursor Colors**
+- All remote cursors look identical except for the name label
+- Should assign each connected user a distinct colour
 
-**11. Reconnection & Offline Resilience**
-- The current provider doesn't visibly handle disconnection (e.g., show a "reconnecting..." banner)
-- Users might not know if they're offline
-- Yjs itself handles offline edits (they queue up), but the UI gives no feedback
+**11. Reconnection & Offline UI**
+- The provider handles offline edits (they queue up in Yjs) but shows no user-visible feedback
+- Should show a "reconnecting…" banner when the Realtime channel drops
 
 **12. Board Access Control**
-- Currently any authenticated user accesses the same board
-- There's no concept of "this board belongs to this user/team"
-- For a real enterprise product: boards should have owners, collaborators, and view-only guests
+- Any authenticated user accesses the same board
+- For real enterprise use: boards need owners, collaborators, view-only guests
 
 **13. Performance on Large Boards**
-- All layers are rendered as DOM elements — there's no virtualization
-- On a board with hundreds of elements, performance would degrade
-- Should implement canvas-based rendering (e.g., via `<canvas>` API or Konva.js) or at minimum virtualize off-screen elements
+- All layers rendered as DOM elements — no virtualization
+- Hundreds of elements would degrade performance
+- Mitigation: canvas-based rendering (Konva.js) or off-screen element virtualization
 
 **14. Mobile / Touch Support**
-- Drag and resize logic is built for pointer events (works for mouse, partially for touch)
-- No pinch-to-zoom gesture handling
-- The app is primarily desktop-oriented currently
+- No pinch-to-zoom gesture handling; primarily desktop-oriented
 
-**15. Cursor Throttling**
-- Awareness cursor updates fire on every `pointermove` event
-- On fast movements this could flood the Supabase Realtime channel
-- Should throttle awareness broadcasts (e.g., max 30 fps / ~33ms)
+**15. Cursor Awareness Throttling**
+- Awareness broadcasts on every `pointermove` — should throttle to ~30 fps
 
-**16. Per-User Color Assignment**
-- Currently, user name comes from Clerk profile
-- All cursors look the same except for the name label
-- Should assign each connected user a distinct color (for cursor, avatar border, selection highlight)
-
-**17. AI Integration**
-- `PROJECT.md` mentions "For AI features, use Anthropic Claude 3.5 Sonnet tool-calling patterns" — this is aspirational, not implemented
-- Possible AI features: sticky note summarization, auto-layout, content generation, meeting notes extraction
+**16. AI Integration**
+- Not implemented. Possible features: sticky note summarization, auto-layout, content generation via Claude 3.5 Sonnet tool-calling
 
 ---
 
 ## 9. Development Principles (from PROJECT.md)
 
-1. **Priority #1:** Bulletproof multiplayer sync (Yjs CRDT + Supabase Realtime). Sync is self-hosted; no third-party sync service.
+1. **Priority #1:** Bulletproof multiplayer sync (Yjs CRDT + Supabase Realtime). No third-party sync service.
 2. **Priority #2:** Enterprise security (Clerk + Supabase RLS).
-3. Use TypeScript for all components; strict typing for Board Objects.
-4. Follow Yjs + Supabase integration patterns (shared Y.Doc, custom SupabaseYjsProvider, optional persistence via `yjs_updates`).
+3. TypeScript strict mode for all components; strict typing for all layer types.
+4. Follow Yjs + Supabase integration patterns (shared Y.Doc, custom SupabaseYjsProvider, persistence via `yjs_updates`).
 5. For AI features, use Anthropic Claude 3.5 Sonnet tool-calling patterns.
 
 ---
@@ -531,18 +547,16 @@ This is the brain of the UI. Responsibilities:
 ## 10. How to Run Locally
 
 ```bash
-# Install dependencies
 npm install
 
-# Set environment variables in .env.local:
+# .env.local:
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 
-# Apply Supabase schema (run schema.sql in Supabase SQL Editor)
+# Apply schema in Supabase SQL Editor (supabase/schema.sql)
 
-# Start dev server
 npm run dev
 # → http://localhost:3000
 ```
@@ -551,30 +565,30 @@ npm run dev
 
 ## 11. Deployment
 
-- Hosted on **Vercel** (Next.js native)
-- Database and Realtime on **Supabase** (free tier sufficient for MVP)
-- Auth on **Clerk** (free tier sufficient)
-- All environment variables must be set in Vercel project settings
-- Clerk dashboard must have the production Vercel domain added
+- **Vercel** (Next.js native) — set all four env vars in project settings
+- **Supabase** — free tier sufficient for MVP; schema applied via SQL editor
+- **Clerk** — free tier sufficient; production Vercel domain must be added in Clerk dashboard
+- Full step-by-step instructions in `DEPLOY.md`
 
 ---
 
 ## 12. Summary
 
-CollabBoard is a **production-quality, self-hosted collaborative whiteboard** built on Next.js 16 + Yjs + Supabase + Clerk. It's architecturally clean: Yjs handles all CRDT state, a custom provider handles transport (Supabase Realtime broadcast) and persistence (Supabase Postgres), and React components just read from Yjs and write back to it.
+CollabBoard is a **production-quality, self-hosted collaborative whiteboard** built on Next.js 16 + Yjs + Supabase + Clerk. Yjs handles all CRDT state, a custom provider handles transport (Supabase Realtime broadcast) and persistence (Supabase Postgres), and React components read from Yjs and write back.
 
-The app has grown significantly beyond its initial MVP. The current element palette (sticky notes, rectangles, circles, text, lines, arrows) covers the core whiteboard use case. Multi-select, marquee selection, copy/paste, duplicate, context-sensitive formatting, and a full keyboard shortcut system make it feel polished.
+**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, and **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
 
-The **most impactful next features** in order of priority are:
-1. **Undo/Redo** via `Y.UndoManager` (already in Yjs, just needs wiring — all mutations are already transacted)
-2. **Multiple boards** with a board listing/management UI
-3. **Layer z-ordering** (bring to front/back)
-4. **Freehand drawing** (pencil tool with stroke point arrays)
-5. **Rich text in sticky notes** (via y-prosemirror / Tiptap for true character-level collaboration)
-6. **Per-user cursor color assignment**
-7. **Reconnection UI / offline feedback**
-8. **Image upload** (Supabase Storage)
+**Most impactful next features** in priority order:
+
+1. **Undo/Redo** — `Y.UndoManager` already supported by Yjs; just needs wiring
+2. **Multiple boards** — URL-based routing, board listing UI
+3. **Layer z-ordering** — bring to front / send to back
+4. **Freehand drawing** — pencil tool
+5. **Editable connector labels** — inline editing for `ConnectorLayer.label`
+6. **Rich text in sticky notes** — `Y.Text` + y-prosemirror
+7. **Per-user cursor colors**
+8. **Image upload** via Supabase Storage
 9. **Export to PNG/SVG**
-10. **AI integration** (Claude 3.5 Sonnet for summarization, layout, content generation)
+10. **AI integration** — Claude 3.5 Sonnet for summarization, layout, content generation
 
-The codebase is small (~20 files), well-typed, and easy to extend. The hardest architectural change would be adding rich text (y-prosemirror) or switching to canvas-based rendering for performance. Everything else is relatively straightforward to add.
+The codebase is ~21 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.

@@ -255,6 +255,69 @@
   min-width: 20px;
 }
 
+/* ── Connector tool ──────────────────────────────────────────────────────── */
+
+/* Full-board overlay active when connector tool is selected */
+.connectorOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 51; /* above handOverlay (50) */
+  cursor: crosshair;
+}
+
+/* Ghost anchor dots shown on hovered shape when connector tool is active.
+   Positioned in world space (inside worldTransform) so they scale with zoom. */
+.connectorAnchor {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 2px solid white;
+  box-shadow: 0 0 0 1.5px #3b82f6;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 10;
+  animation: anchorPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes anchorPulse {
+  0%, 100% { box-shadow: 0 0 0 1.5px #3b82f6; }
+  50%       { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.35); }
+}
+
+/* Connector routing style selector */
+.connectorStyleRow {
+  display: flex;
+  gap: 3px;
+}
+
+.connectorStyleBtn {
+  flex: 1;
+  padding: 3px 0;
+  font-size: 0.6rem;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.connectorStyleBtn:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.connectorStyleBtnActive {
+  background: #eff6ff !important;
+  border-color: #3b82f6 !important;
+  color: #1d4ed8 !important;
+}
+
 /* ── Help button ─────────────────────────────────────────────────────────── */
 
 .helpButton {

@@ -11,6 +11,7 @@ import type {
   StickyLayer,
   CircleLayer,
   TextLayer,
+  ConnectorLayer,
 } from "@/lib/yjs-store";
 import { BoardTransformProvider, useBoardTransform } from "@/lib/board-transform";
 import { Avatars } from "./Avatars";
@@ -20,6 +21,7 @@ import { ShapeRectangle } from "./ShapeRectangle";
 import { ShapeCircle } from "./ShapeCircle";
 import { TextElement } from "./TextElement";
 import { LineElement } from "./LineElement";
+import { ConnectorElement, getLayerBounds } from "./ConnectorElement";
 import { HelpModal } from "./HelpModal";
 import {
   StickyNote as StickyIcon,
@@ -33,19 +35,20 @@ import {
   Hand,
   MousePointer2,
   HelpCircle,
+  Spline,
 } from "lucide-react";
 import styles from "./Whiteboard.module.css";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const DEFAULT_RECT_SIZE = 120;
+const DEFAULT_RECT_SIZE    = 120;
 const DEFAULT_STICKY_WIDTH = 200;
 const DEFAULT_STICKY_HEIGHT = 150;
-const DEFAULT_CIRCLE_SIZE = 120;
-const DEFAULT_TEXT_WIDTH = 200;
-const DEFAULT_TEXT_HEIGHT = 40;
-const DEFAULT_LINE_LENGTH = 160;
-const PASTE_OFFSET = 20;
+const DEFAULT_CIRCLE_SIZE  = 120;
+const DEFAULT_TEXT_WIDTH   = 200;
+const DEFAULT_TEXT_HEIGHT  = 40;
+const DEFAULT_LINE_LENGTH  = 160;
+const PASTE_OFFSET         = 20;
 
 const COLOR_PRESETS = [
   "#ffffff", "#f1f5f9", "#fef3c7", "#fee2e2",
@@ -64,6 +67,7 @@ function lineBboxOrigin(pts: [number, number][]): { x: number; y: number } {
 }
 
 function getLayerBBox(layer: LayerData) {
+  if (layer.type === "connector") return null;
   if (layer.type === "line") {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [px, py] of layer.points) {
@@ -74,11 +78,30 @@ function getLayerBBox(layer: LayerData) {
     }
     return { x1: minX, y1: minY, x2: maxX, y2: maxY };
   }
-  return { x1: layer.x, y1: layer.y, x2: layer.x + (layer.width ?? 0), y2: layer.y + (layer.height ?? 0) };
+  const w = (layer as { width?: number }).width ?? 0;
+  const h = (layer as { height?: number }).height ?? 0;
+  return { x1: layer.x, y1: layer.y, x2: layer.x + w, y2: layer.y + h };
 }
 
 function generateId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+/**
+ * Return the ID of the topmost non-connector, non-line layer whose bounding
+ * box contains (wx, wy), or null if none.  Reads from the live Y.Map so it
+ * is always current even inside pointer-event handlers.
+ */
+function hitTestShapeLayers(wx: number, wy: number): string | null {
+  for (const [id, layer] of sharedLayers.entries()) {
+    if (!layer || layer.type === "connector" || layer.type === "line") continue;
+    const bounds = getLayerBounds(layer);
+    if (!bounds) continue;
+    if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) {
+      return id;
+    }
+  }
+  return null;
 }
 
 // ── Inline sub-components ─────────────────────────────────────────────────────
@@ -91,8 +114,6 @@ interface ColorPaletteProps {
 
 function ColorPalette({ label, value, onChange }: ColorPaletteProps) {
   const [hex, setHex] = useState(value);
-
-  // Keep hex field in sync when value changes from outside
   useEffect(() => setHex(value), [value]);
 
   const commit = (v: string) => {
@@ -157,6 +178,68 @@ function FontSizeControl({ value, onDecrease, onIncrease }: FontSizeControlProps
   );
 }
 
+/** Three-way toggle for connector routing style. */
+interface ConnectorStyleControlProps {
+  value: ConnectorLayer["style"];
+  onChange: (s: ConnectorLayer["style"]) => void;
+}
+
+function ConnectorStyleControl({ value, onChange }: ConnectorStyleControlProps) {
+  const options: { key: ConnectorLayer["style"]; label: string }[] = [
+    { key: "straight", label: "Straight" },
+    { key: "curved",   label: "Curved" },
+    { key: "elbow",    label: "Elbow" },
+  ];
+  return (
+    <div className={styles.formatSection}>
+      <span className={styles.formatLabel}>Routing</span>
+      <div className={styles.connectorStyleRow}>
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            className={`${styles.connectorStyleBtn} ${value === o.key ? styles.connectorStyleBtnActive : ""}`}
+            onClick={() => onChange(o.key)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Toggle for connector endpoint decoration. */
+interface ConnectorEndpointControlProps {
+  value: ConnectorLayer["endpoints"];
+  onChange: (e: ConnectorLayer["endpoints"]) => void;
+}
+
+function ConnectorEndpointControl({ value, onChange }: ConnectorEndpointControlProps) {
+  const options: { key: ConnectorLayer["endpoints"]; label: string }[] = [
+    { key: "arrow", label: "Arrow" },
+    { key: "dot",   label: "Dot" },
+    { key: "none",  label: "None" },
+  ];
+  return (
+    <div className={styles.formatSection}>
+      <span className={styles.formatLabel}>Endpoint</span>
+      <div className={styles.connectorStyleRow}>
+        {options.map((o) => (
+          <button
+            key={o.key}
+            type="button"
+            className={`${styles.connectorStyleBtn} ${value === o.key ? styles.connectorStyleBtnActive : ""}`}
+            onClick={() => onChange(o.key)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main whiteboard ───────────────────────────────────────────────────────────
 
 function WhiteboardInner() {
@@ -192,6 +275,29 @@ function WhiteboardInner() {
   const showHelpRef = useRef(false);
   showHelpRef.current = showHelp;
 
+  // ── Connector tool state ─────────────────────────────────────────────────
+
+  /** ID of the shape the cursor is currently over (connector tool). */
+  const [connectorHoverId, setConnectorHoverIdState] = useState<string | null>(null);
+  const connectorHoverIdRef = useRef<string | null>(null);
+  const setConnectorHoverId = useCallback((id: string | null) => {
+    connectorHoverIdRef.current = id;
+    setConnectorHoverIdState(id);
+  }, []);
+
+  /** In-progress connector drag. */
+  type ConnectorDraft = {
+    fromId: string;
+    fromPt: [number, number];   // world-space center of source
+    currentPt: [number, number]; // world-space cursor
+  };
+  const [connectorDraft, setConnectorDraftState] = useState<ConnectorDraft | null>(null);
+  const connectorDraftRef = useRef<ConnectorDraft | null>(null);
+  const setConnectorDraft = useCallback((d: ConnectorDraft | null) => {
+    connectorDraftRef.current = d;
+    setConnectorDraftState(d);
+  }, []);
+
   const { user } = useUser();
   const {
     pan,
@@ -205,8 +311,13 @@ function WhiteboardInner() {
     setToolMode,
   } = useBoardTransform();
 
+  // Keep a ref of toolMode for use in keyboard handlers
+  const toolModeRef = useRef(toolMode);
+  toolModeRef.current = toolMode;
+
   // Effective hand mode: persistent hand tool OR space held
   const isHandMode = toolMode === "hand" || isSpaceDown;
+  const isConnectorMode = toolMode === "connector" && !isSpaceDown;
 
   // ── Sync selection to ref ───────────────────────────────────────────────
 
@@ -224,7 +335,7 @@ function WhiteboardInner() {
       const rect = el.getBoundingClientRect();
       return { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
     },
-    [containerRef]
+    [containerRef],
   );
 
   // ── Effects ─────────────────────────────────────────────────────────────
@@ -241,20 +352,36 @@ function WhiteboardInner() {
     });
   }, [user]);
 
+  // ── Orphan connector cleanup ─────────────────────────────────────────────
+  // Observes the Y.Map and purges any connector whose fromId or toId no longer
+  // exists — runs in a new transaction after the triggering one completes.
+
+  useEffect(() => {
+    const cleanup = () => {
+      const toDelete: string[] = [];
+      for (const [id, layer] of sharedLayers.entries()) {
+        if (layer?.type !== "connector") continue;
+        const conn = layer as ConnectorLayer;
+        if (!sharedLayers.has(conn.fromId) || !sharedLayers.has(conn.toId)) {
+          toDelete.push(id);
+        }
+      }
+      if (toDelete.length > 0) {
+        ydoc.transact(() => {
+          for (const id of toDelete) sharedLayers.delete(id);
+        });
+      }
+    };
+    sharedLayers.observe(cleanup);
+    return () => sharedLayers.unobserve(cleanup);
+  }, []);
+
   // ── Selection handler ───────────────────────────────────────────────────
 
-  /**
-   * Called by child objects on pointer-down.
-   * Key fix: clicking an already-selected item (without Shift) keeps the
-   * entire group selected so it can be dragged as one.
-   */
   const handleSelect = useCallback(
     (id: string, shiftKey: boolean) => {
       const prev = selectedIdsRef.current;
-      if (!shiftKey && prev.has(id)) {
-        // Already in selection — preserve group for potential drag
-        return;
-      }
+      if (!shiftKey && prev.has(id)) return;
       let next: Set<string>;
       if (shiftKey) {
         next = new Set(prev);
@@ -266,7 +393,7 @@ function WhiteboardInner() {
       selectedIdsRef.current = next;
       setSelectedIds(next);
     },
-    []
+    [],
   );
 
   // ── Batch drag handlers ─────────────────────────────────────────────────
@@ -279,6 +406,8 @@ function WhiteboardInner() {
     for (const id of ids) {
       const layer = sharedLayers.get(id);
       if (!layer) continue;
+      // Connectors are auto-routed — they have no independent position to drag
+      if (layer.type === "connector") continue;
       if (layer.type === "line") {
         positions.set(id, { x: layer.x, y: layer.y, points: layer.points.map((p) => [p[0], p[1]]) });
       } else {
@@ -288,10 +417,6 @@ function WhiteboardInner() {
     dragStartPositions.current = positions;
   }, []);
 
-  /**
-   * All updates — including the primary dragged object — go through a single
-   * ydoc.transact so there is no double-write and everything is one undo step.
-   */
   const handleDragDelta = useCallback((dx: number, dy: number) => {
     ydoc.transact(() => {
       for (const [id, startPos] of dragStartPositions.current) {
@@ -299,7 +424,7 @@ function WhiteboardInner() {
         if (!layer) continue;
         if (layer.type === "line") {
           const newPoints = (startPos.points as [number, number][]).map(
-            ([px, py]) => [px + dx, py + dy] as [number, number]
+            ([px, py]) => [px + dx, py + dy] as [number, number],
           );
           const { x, y } = lineBboxOrigin(newPoints);
           sharedLayers.set(id, { ...layer, points: newPoints, x, y });
@@ -328,7 +453,7 @@ function WhiteboardInner() {
         | undefined;
       awareness.setLocalStateField("user", { ...prev, cursor });
     },
-    [getScreenPos, screenToWorld, containerRef]
+    [getScreenPos, screenToWorld, containerRef],
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -345,6 +470,7 @@ function WhiteboardInner() {
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
+      if (showHelpRef.current) return;
       const pos = getScreenPos(e);
       if (!pos) return;
       const { pan: p, zoom: z } = transformRef.current;
@@ -355,14 +481,19 @@ function WhiteboardInner() {
       setPan({ x: pos.sx - worldX * newZoom, y: pos.sy - worldY * newZoom });
       setZoom(newZoom);
     },
-    [getScreenPos, transformRef, setPan, setZoom]
+    [getScreenPos, transformRef, setPan, setZoom],
   );
 
   // ── Board pointer (pan / marquee) ───────────────────────────────────────
 
   const handleBoardPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      const handMode = toolMode === "hand" || isSpaceDown;
+      // Let the connector overlay handle all events while in connector mode,
+      // UNLESS Space is held — in that case the hand overlay is active and
+      // panning must be allowed regardless of the underlying tool.
+      if (toolModeRef.current === "connector" && !isSpaceDownRef.current) return;
+
+      const handMode = toolModeRef.current === "hand" || isSpaceDownRef.current;
 
       if (e.button === 1 || (e.button === 0 && handMode)) {
         panStartRef.current = { x: e.clientX, y: e.clientY, startPanX: pan.x, startPanY: pan.y };
@@ -381,7 +512,7 @@ function WhiteboardInner() {
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [pan, getScreenPos, toolMode, isSpaceDown]
+    [pan, getScreenPos],
   );
 
   const handleBoardPointerMove = useCallback(
@@ -398,7 +529,7 @@ function WhiteboardInner() {
         }
       }
     },
-    [setPan, getScreenPos]
+    [setPan, getScreenPos],
   );
 
   const handleBoardPointerUp = useCallback(
@@ -432,8 +563,9 @@ function WhiteboardInner() {
 
           const hit = new Set<string>();
           for (const [id, layer] of sharedLayers.entries()) {
-            if (!layer) continue;
+            if (!layer || layer.type === "connector") continue;
             const bbox = getLayerBBox(layer);
+            if (!bbox) continue;
             if (bbox.x2 >= w1.x && bbox.x1 <= w2.x && bbox.y2 >= w1.y && bbox.y1 <= w2.y) {
               hit.add(id);
             }
@@ -445,8 +577,102 @@ function WhiteboardInner() {
         });
       }
     },
-    [screenToWorld, updateSelectedIds]
+    [screenToWorld, updateSelectedIds],
   );
+
+  // ── Connector overlay handlers ──────────────────────────────────────────
+
+  const handleConnectorPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+
+      if (connectorDraftRef.current) {
+        // Update draft preview position
+        const updated = { ...connectorDraftRef.current, currentPt: [world.x, world.y] as [number, number] };
+        connectorDraftRef.current = updated;
+        setConnectorDraftState(updated);
+
+        // Still track hover for target snapping feedback
+        const hoverId = hitTestShapeLayers(world.x, world.y);
+        const targetId = hoverId !== connectorDraftRef.current?.fromId ? hoverId : null;
+        if (targetId !== connectorHoverIdRef.current) {
+          setConnectorHoverId(targetId);
+        }
+      } else {
+        const hoverId = hitTestShapeLayers(world.x, world.y);
+        if (hoverId !== connectorHoverIdRef.current) {
+          setConnectorHoverId(hoverId);
+        }
+      }
+    },
+    [getScreenPos, screenToWorld, setConnectorHoverId],
+  );
+
+  const handleConnectorPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+
+      const hoverId = hitTestShapeLayers(world.x, world.y);
+      if (!hoverId) return;
+
+      const fromLayer = sharedLayers.get(hoverId);
+      if (!fromLayer) return;
+      const bounds = getLayerBounds(fromLayer);
+      if (!bounds) return;
+
+      const draft: ConnectorDraft = {
+        fromId: hoverId,
+        fromPt: [bounds.cx, bounds.cy],
+        currentPt: [world.x, world.y],
+      };
+      setConnectorDraft(draft);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [getScreenPos, screenToWorld, setConnectorDraft],
+  );
+
+  const handleConnectorPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+
+      const draft = connectorDraftRef.current;
+      if (!draft) return;
+
+      const pos = getScreenPos(e);
+      if (pos) {
+        const world = screenToWorld(pos.sx, pos.sy);
+        const toId = hitTestShapeLayers(world.x, world.y);
+        if (toId && toId !== draft.fromId) {
+          const connId = generateId("connector");
+          const conn: ConnectorLayer = {
+            type: "connector",
+            fromId: draft.fromId,
+            toId,
+            style: "straight",
+            stroke: { color: "#1e293b", width: 2 },
+            endpoints: "arrow",
+          };
+          sharedLayers.set(connId, conn);
+          updateSelectedIds(new Set([connId]));
+        }
+      }
+
+      setConnectorDraft(null);
+      setConnectorHoverId(null);
+    },
+    [getScreenPos, screenToWorld, setConnectorDraft, setConnectorHoverId, updateSelectedIds],
+  );
+
+  const handleConnectorOverlayLeave = useCallback(() => {
+    if (!connectorDraftRef.current) {
+      setConnectorHoverId(null);
+    }
+  }, [setConnectorHoverId]);
 
   // ── Formatting actions ──────────────────────────────────────────────────
 
@@ -481,6 +707,30 @@ function WhiteboardInner() {
         const layer = sharedLayers.get(id);
         if (layer?.type === "line") {
           sharedLayers.set(id, { ...layer, color });
+        } else if (layer?.type === "connector") {
+          sharedLayers.set(id, { ...layer, stroke: { ...layer.stroke, color } });
+        }
+      }
+    });
+  }, []);
+
+  const applyConnectorStyle = useCallback((connStyle: ConnectorLayer["style"]) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (layer?.type === "connector") {
+          sharedLayers.set(id, { ...layer, style: connStyle });
+        }
+      }
+    });
+  }, []);
+
+  const applyConnectorEndpoints = useCallback((endpoints: ConnectorLayer["endpoints"]) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (layer?.type === "connector") {
+          sharedLayers.set(id, { ...layer, endpoints });
         }
       }
     });
@@ -511,7 +761,6 @@ function WhiteboardInner() {
         target.tagName === "TEXTAREA" ||
         target.isContentEditable;
 
-      // Space: temporary hand mode (not while editing)
       if (e.key === " " && !isEditing) {
         e.preventDefault();
         if (!isSpaceDownRef.current) {
@@ -521,17 +770,28 @@ function WhiteboardInner() {
         return;
       }
 
-      // Tool mode toggle (not while editing, not when a modifier is held)
       const mod = e.metaKey || e.ctrlKey;
       if (!isEditing && !mod) {
         if (e.key === "v" || e.key === "V") { setToolMode("select"); return; }
         if (e.key === "h" || e.key === "H") { setToolMode("hand"); return; }
+        if (e.key === "c" || e.key === "C") { setToolMode("connector"); return; }
         if (e.key === "?") { setShowHelp((v) => !v); return; }
       }
 
       if (isEditing) return;
 
-      // Delete / Backspace
+      if (e.key === "Escape") {
+        if (toolModeRef.current === "connector") {
+          // Cancel connector draft and exit connector mode
+          setConnectorDraft(null);
+          setConnectorHoverId(null);
+          setToolMode("select");
+          return;
+        }
+        if (!showHelpRef.current) updateSelectedIds(new Set());
+        return;
+      }
+
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         const ids = selectedIdsRef.current;
@@ -542,20 +802,12 @@ function WhiteboardInner() {
         return;
       }
 
-      // Escape — skip deselect when the help modal is consuming it
-      if (e.key === "Escape") {
-        if (!showHelpRef.current) updateSelectedIds(new Set());
-        return;
-      }
-
-      // Ctrl+A — select all
       if (mod && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
         updateSelectedIds(new Set(sharedLayers.keys()));
         return;
       }
 
-      // Ctrl+D — duplicate
       if (mod && (e.key === "d" || e.key === "D")) {
         e.preventDefault();
         const ids = selectedIdsRef.current;
@@ -565,6 +817,8 @@ function WhiteboardInner() {
           for (const id of ids) {
             const layer = sharedLayers.get(id);
             if (!layer) continue;
+            // Connectors reference other IDs — skip duplication
+            if (layer.type === "connector") continue;
             const newId = generateId(layer.type);
             if (layer.type === "line") {
               sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: layer.points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
@@ -578,25 +832,24 @@ function WhiteboardInner() {
         return;
       }
 
-      // Ctrl+C — copy
       if (mod && (e.key === "c" || e.key === "C")) {
         const ids = selectedIdsRef.current;
         const copied: LayerData[] = [];
         for (const id of ids) {
           const layer = sharedLayers.get(id);
-          if (layer) copied.push({ ...layer } as LayerData);
+          if (layer && layer.type !== "connector") copied.push({ ...layer } as LayerData);
         }
         clipboardRef.current = copied;
         return;
       }
 
-      // Ctrl+V — paste
       if (mod && (e.key === "v" || e.key === "V")) {
         e.preventDefault();
         if (clipboardRef.current.length === 0) return;
         const newIds = new Set<string>();
         ydoc.transact(() => {
           for (const layer of clipboardRef.current) {
+            if (layer.type === "connector") continue;
             const newId = generateId(layer.type);
             if (layer.type === "line") {
               sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: (layer as LineLayer).points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
@@ -606,12 +859,12 @@ function WhiteboardInner() {
             newIds.add(newId);
           }
         });
-        // Shift clipboard so repeated pastes don't stack
-        clipboardRef.current = clipboardRef.current.map((l) =>
-          l.type === "line"
+        clipboardRef.current = clipboardRef.current.map((l) => {
+          if (l.type === "connector") return l;
+          return l.type === "line"
             ? { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET, points: (l as LineLayer).points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) }
-            : { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET }
-        ) as LayerData[];
+            : { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET };
+        }) as LayerData[];
         updateSelectedIds(newIds);
         return;
       }
@@ -630,7 +883,7 @@ function WhiteboardInner() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [updateSelectedIds, setToolMode]);
+  }, [updateSelectedIds, setToolMode, setConnectorDraft, setConnectorHoverId]);
 
   // ── Layer creation ──────────────────────────────────────────────────────
 
@@ -678,7 +931,7 @@ function WhiteboardInner() {
       sharedLayers.set(id, { type: "line", x: x1, y, points: [[x1, y], [x2, y]], color: "#1e293b", thickness: 2, variant: lineVariant });
       updateSelectedIds(new Set([id]));
     },
-    [viewportCenter, updateSelectedIds]
+    [viewportCenter, updateSelectedIds],
   );
 
   const resetView = useCallback(() => {
@@ -702,7 +955,7 @@ function WhiteboardInner() {
     ydoc.transact(() => {
       for (const id of ids) {
         const layer = sharedLayers.get(id);
-        if (!layer) continue;
+        if (!layer || layer.type === "connector") continue;
         const newId = generateId(layer.type);
         if (layer.type === "line") {
           sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: layer.points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
@@ -721,17 +974,14 @@ function WhiteboardInner() {
     .map((id) => layers.get(id))
     .filter(Boolean) as LayerData[];
 
-  const hasFillable = selectedLayers.some(
-    (l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky"
-  );
-  const hasText = selectedLayers.some((l) => l.type === "text");
+  const hasFillable    = selectedLayers.some((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky");
+  const hasText        = selectedLayers.some((l) => l.type === "text");
   const hasStickyOrText = selectedLayers.some((l) => l.type === "sticky" || l.type === "text");
-  const hasLine = selectedLayers.some((l) => l.type === "line");
-  const hasSelection = selectedIds.size > 0;
+  const hasLine        = selectedLayers.some((l) => l.type === "line");
+  const hasConnector   = selectedLayers.some((l) => l.type === "connector");
+  const hasSelection   = selectedIds.size > 0;
 
-  const firstFillable = selectedLayers.find(
-    (l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky"
-  );
+  const firstFillable = selectedLayers.find((l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky");
   const currentFillColor =
     firstFillable?.type === "sticky"
       ? (firstFillable as StickyLayer).bgColor ?? "#fffbeb"
@@ -745,9 +995,12 @@ function WhiteboardInner() {
   const firstLine = selectedLayers.find((l) => l.type === "line") as LineLayer | undefined;
   const currentStrokeColor = firstLine?.color ?? "#1e293b";
 
-  const firstStickyOrText = selectedLayers.find(
-    (l) => l.type === "sticky" || l.type === "text"
-  );
+  const firstConnector = selectedLayers.find((l) => l.type === "connector") as ConnectorLayer | undefined;
+  const currentConnectorColor    = firstConnector?.stroke.color ?? "#1e293b";
+  const currentConnectorStyle    = firstConnector?.style ?? "straight";
+  const currentConnectorEndpoints = firstConnector?.endpoints ?? "arrow";
+
+  const firstStickyOrText = selectedLayers.find((l) => l.type === "sticky" || l.type === "text");
   const currentFontSize =
     firstStickyOrText?.type === "text"
       ? (firstStickyOrText as TextLayer).fontSize
@@ -755,9 +1008,34 @@ function WhiteboardInner() {
       ? (firstStickyOrText as StickyLayer).fontSize ?? 14
       : 14;
 
-  // ── Render ──────────────────────────────────────────────────────────────
+  // ── Partition layer entries for z-order rendering ───────────────────────
+  // Connectors render first (lowest DOM order = lowest z-index) so they appear
+  // behind Sticky Notes and Shapes but above the canvas background.
 
   const layerEntries = Array.from(layers.entries());
+  const connectorEntries = layerEntries.filter(([, l]) => l?.type === "connector");
+  const shapeEntries     = layerEntries.filter(([, l]) => l?.type !== "connector");
+
+  // ── Anchor computation for connector hover UI ───────────────────────────
+
+  type Anchor = { key: string; wx: number; wy: number };
+  let hoverAnchors: Anchor[] | null = null;
+  if (isConnectorMode && connectorHoverId) {
+    const hl = layers.get(connectorHoverId);
+    if (hl) {
+      const bounds = getLayerBounds(hl);
+      if (bounds) {
+        hoverAnchors = [
+          { key: "top",    wx: bounds.cx,  wy: bounds.y1 },
+          { key: "bottom", wx: bounds.cx,  wy: bounds.y2 },
+          { key: "left",   wx: bounds.x1,  wy: bounds.cy },
+          { key: "right",  wx: bounds.x2,  wy: bounds.cy },
+        ];
+      }
+    }
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   return (
     <div
@@ -768,7 +1046,7 @@ function WhiteboardInner() {
       onPointerLeave={handlePointerLeave}
       onWheel={handleWheel}
     >
-      {/* Fallback pan/marquee layer (select mode, empty canvas) */}
+      {/* Fallback pan/marquee layer */}
       <div
         data-pan-handle
         className={`${styles.panHandle} ${styles.panHandleCrosshair}`}
@@ -783,7 +1061,25 @@ function WhiteboardInner() {
         className={styles.worldTransform}
         style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
       >
-        {layerEntries.map(([id, layer]) => {
+        {/* ── Connectors (lowest z-index, behind all shapes) ── */}
+        {connectorEntries.map(([id, layer]) => {
+          if (!layer || layer.type !== "connector") return null;
+          const conn = layer as ConnectorLayer;
+          return (
+            <ConnectorElement
+              key={id}
+              id={id}
+              layer={conn}
+              fromLayer={layers.get(conn.fromId)}
+              toLayer={layers.get(conn.toId)}
+              selected={selectedIds.has(id)}
+              onSelect={(sk) => handleSelect(id, sk)}
+            />
+          );
+        })}
+
+        {/* ── Shapes and other layers (above connectors) ── */}
+        {shapeEntries.map(([id, layer]) => {
           if (!layer) return null;
           const selected = selectedIds.has(id);
 
@@ -824,9 +1120,51 @@ function WhiteboardInner() {
           );
           return null;
         })}
+
+        {/* ── Connector anchor dots (shown on hover when connector tool active) ── */}
+        {hoverAnchors?.map((a) => (
+          <div
+            key={a.key}
+            className={styles.connectorAnchor}
+            style={{ left: a.wx, top: a.wy }}
+          />
+        ))}
+
+        {/* ── Connector draft preview line ── */}
+        {connectorDraft && (() => {
+          const [fx, fy] = connectorDraft.fromPt;
+          const [cx, cy] = connectorDraft.currentPt;
+          const pad = 10;
+          const left   = Math.min(fx, cx) - pad;
+          const top    = Math.min(fy, cy) - pad;
+          const width  = Math.abs(fx - cx) + pad * 2;
+          const height = Math.abs(fy - cy) + pad * 2;
+          return (
+            <svg
+              style={{
+                position: "absolute",
+                left,
+                top,
+                width,
+                height,
+                overflow: "visible",
+                pointerEvents: "none",
+              }}
+            >
+              <line
+                x1={fx - left} y1={fy - top}
+                x2={cx - left} y2={cy - top}
+                stroke="#3b82f6"
+                strokeWidth={2}
+                strokeDasharray="6,3"
+                strokeLinecap="round"
+              />
+            </svg>
+          );
+        })()}
       </div>
 
-      {/* Hand-mode overlay — covers objects so all drags pan instead of select */}
+      {/* Hand-mode overlay — covers objects so all drags pan */}
       {isHandMode && (
         <div
           className={styles.handOverlay}
@@ -834,6 +1172,17 @@ function WhiteboardInner() {
           onPointerMove={handleBoardPointerMove}
           onPointerUp={handleBoardPointerUp}
           onPointerLeave={handleBoardPointerUp}
+        />
+      )}
+
+      {/* Connector-mode overlay — captures pointer events for drawing connectors */}
+      {isConnectorMode && (
+        <div
+          className={styles.connectorOverlay}
+          onPointerMove={handleConnectorPointerMove}
+          onPointerDown={handleConnectorPointerDown}
+          onPointerUp={handleConnectorPointerUp}
+          onPointerLeave={handleConnectorOverlayLeave}
         />
       )}
 
@@ -874,6 +1223,14 @@ function WhiteboardInner() {
           >
             <Hand size={16} />
           </button>
+          <button
+            type="button"
+            title="Connector (C)"
+            className={`${styles.toolModeBtn} ${isConnectorMode ? styles.toolModeBtnActive : ""}`}
+            onClick={() => setToolMode("connector")}
+          >
+            <Spline size={16} />
+          </button>
         </div>
 
         <div className={styles.toolbarDivider} />
@@ -912,27 +1269,33 @@ function WhiteboardInner() {
             )}
 
             {hasFillable && (
-              <ColorPalette
-                label="Fill"
-                value={currentFillColor}
-                onChange={applyFillColor}
-              />
+              <ColorPalette label="Fill" value={currentFillColor} onChange={applyFillColor} />
             )}
 
             {hasText && (
-              <ColorPalette
-                label="Text Color"
-                value={currentTextColor}
-                onChange={applyTextColor}
-              />
+              <ColorPalette label="Text Color" value={currentTextColor} onChange={applyTextColor} />
             )}
 
             {hasLine && (
-              <ColorPalette
-                label="Stroke"
-                value={currentStrokeColor}
-                onChange={applyStrokeColor}
-              />
+              <ColorPalette label="Stroke" value={currentStrokeColor} onChange={applyStrokeColor} />
+            )}
+
+            {hasConnector && (
+              <>
+                <ColorPalette
+                  label="Connector Color"
+                  value={currentConnectorColor}
+                  onChange={applyStrokeColor}
+                />
+                <ConnectorStyleControl
+                  value={currentConnectorStyle}
+                  onChange={applyConnectorStyle}
+                />
+                <ConnectorEndpointControl
+                  value={currentConnectorEndpoints}
+                  onChange={applyConnectorEndpoints}
+                />
+              </>
             )}
 
             <div className={styles.toolbarDivider} />

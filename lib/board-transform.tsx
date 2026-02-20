@@ -13,7 +13,7 @@ const MIN_ZOOM = 0.01;
 const MAX_ZOOM = 100;
 const ZOOM_STEP = 0.15;
 
-export type ToolMode = "select" | "hand";
+export type ToolMode = "select" | "hand" | "connector";
 
 export interface BoardTransformValue {
   pan: { x: number; y: number };

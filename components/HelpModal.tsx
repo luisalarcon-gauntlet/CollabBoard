@@ -58,7 +58,9 @@ export function HelpModal({ onClose }: HelpModalProps) {
           <div className={styles.shortcutList}>
             <ShortcutRow description="Select tool" keys={["V"]} />
             <ShortcutRow description="Hand / Pan tool" keys={["H"]} />
+            <ShortcutRow description="Connector tool" keys={["C"]} />
             <ShortcutRow description="Temporary pan (hold)" keys={["Space"]} />
+            <ShortcutRow description="Cancel connector / exit tool" keys={["Esc"]} />
           </div>
         </div>
 
@@ -71,6 +73,19 @@ export function HelpModal({ onClose }: HelpModalProps) {
             <ShortcutRow description="Add / remove from selection" keys={["Shift", "Click"]} />
             <ShortcutRow description="Marquee select" keys={["Drag"]} />
             <ShortcutRow description="Deselect all" keys={["Esc"]} />
+          </div>
+        </div>
+
+        <div className={styles.divider} />
+
+        <div className={styles.section}>
+          <p className={styles.sectionTitle}>Connectors</p>
+          <div className={styles.shortcutList}>
+            <ShortcutRow description="Activate connector tool" keys={["C"]} />
+            <ShortcutRow description="Draw connector" keys={["Drag"]} />
+            <ShortcutRow description="Hover shape to see anchors" keys={["—"]} />
+            <ShortcutRow description="Temporary pan while drawing" keys={["Space"]} />
+            <ShortcutRow description="Cancel in-progress connector" keys={["Esc"]} />
           </div>
         </div>
 

@@ -1,0 +1,7 @@
+/* ConnectorElement Component Styles */
+
+.svgWrapper {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}

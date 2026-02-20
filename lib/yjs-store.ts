@@ -62,7 +62,38 @@ export type LineLayer = {
   variant: "straight" | "arrow";
 };
 
-export type LayerData = StickyLayer | RectangleLayer | CircleLayer | TextLayer | LineLayer;
+/**
+ * Smart Connector — a managed edge between two named layers.
+ * Endpoints are always recalculated from the source/target bounding boxes,
+ * so the connector updates live when either object is moved or resized.
+ */
+export type ConnectorLayer = {
+  type: "connector";
+  /** ID of the source layer. */
+  fromId: string;
+  /** ID of the target layer. */
+  toId: string;
+  /** Optional text label rendered at the midpoint. */
+  label?: string;
+  /** Visual routing style. */
+  style: "straight" | "curved" | "elbow";
+  stroke: {
+    color: string;
+    width: number;
+    /** SVG stroke-dasharray value, e.g. "6,3" (dashed) or "2,4" (dotted). Omit for solid. */
+    dashArray?: string;
+  };
+  /** Decoration applied to the target endpoint. */
+  endpoints: "none" | "arrow" | "dot";
+};
+
+export type LayerData =
+  | StickyLayer
+  | RectangleLayer
+  | CircleLayer
+  | TextLayer
+  | LineLayer
+  | ConnectorLayer;
 
 /** The shared Y.Map that stores all whiteboard layers. */
 export const sharedLayers = ydoc.getMap<LayerData>("layers");
