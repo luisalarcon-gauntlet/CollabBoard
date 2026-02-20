@@ -3,8 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
-import { sharedLayers, getAwareness, ensurePersistence } from "@/lib/yjs-store";
-import type { RectangleLayer, StickyLayer, CircleLayer, TextLayer, LineLayer } from "@/lib/yjs-store";
+import { sharedLayers, getAwareness, ensurePersistence, ydoc } from "@/lib/yjs-store";
+import type {
+  LineLayer,
+  LayerData,
+  RectangleLayer,
+  StickyLayer,
+  CircleLayer,
+  TextLayer,
+} from "@/lib/yjs-store";
 import { BoardTransformProvider, useBoardTransform } from "@/lib/board-transform";
 import { Avatars } from "./Avatars";
 import { CursorPresence } from "./CursorPresence";
@@ -13,6 +20,7 @@ import { ShapeRectangle } from "./ShapeRectangle";
 import { ShapeCircle } from "./ShapeCircle";
 import { TextElement } from "./TextElement";
 import { LineElement } from "./LineElement";
+import { HelpModal } from "./HelpModal";
 import {
   StickyNote as StickyIcon,
   Square,
@@ -21,8 +29,14 @@ import {
   MoveUpRight,
   Trash2,
   Home,
+  Copy,
+  Hand,
+  MousePointer2,
+  HelpCircle,
 } from "lucide-react";
 import styles from "./Whiteboard.module.css";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_RECT_SIZE = 120;
 const DEFAULT_STICKY_WIDTH = 200;
@@ -31,11 +45,153 @@ const DEFAULT_CIRCLE_SIZE = 120;
 const DEFAULT_TEXT_WIDTH = 200;
 const DEFAULT_TEXT_HEIGHT = 40;
 const DEFAULT_LINE_LENGTH = 160;
+const PASTE_OFFSET = 20;
+
+const COLOR_PRESETS = [
+  "#ffffff", "#f1f5f9", "#fef3c7", "#fee2e2",
+  "#dbeafe", "#dcfce7", "#f3e8ff", "#1e293b",
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function lineBboxOrigin(pts: [number, number][]): { x: number; y: number } {
+  let minX = Infinity, minY = Infinity;
+  for (const [px, py] of pts) {
+    if (px < minX) minX = px;
+    if (py < minY) minY = py;
+  }
+  return { x: minX, y: minY };
+}
+
+function getLayerBBox(layer: LayerData) {
+  if (layer.type === "line") {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [px, py] of layer.points) {
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
+    return { x1: minX, y1: minY, x2: maxX, y2: maxY };
+  }
+  return { x1: layer.x, y1: layer.y, x2: layer.x + (layer.width ?? 0), y2: layer.y + (layer.height ?? 0) };
+}
+
+function generateId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+// ── Inline sub-components ─────────────────────────────────────────────────────
+
+interface ColorPaletteProps {
+  label: string;
+  value: string;
+  onChange: (c: string) => void;
+}
+
+function ColorPalette({ label, value, onChange }: ColorPaletteProps) {
+  const [hex, setHex] = useState(value);
+
+  // Keep hex field in sync when value changes from outside
+  useEffect(() => setHex(value), [value]);
+
+  const commit = (v: string) => {
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v);
+  };
+
+  return (
+    <div className={styles.formatSection}>
+      <span className={styles.formatLabel}>{label}</span>
+      <div className={styles.colorGrid}>
+        {COLOR_PRESETS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            title={c}
+            className={styles.colorSwatch}
+            style={{
+              backgroundColor: c,
+              outline: value.toLowerCase() === c.toLowerCase() ? "2px solid #3b82f6" : "1px solid #cbd5e1",
+              outlineOffset: 1,
+            }}
+            onClick={() => { onChange(c); setHex(c); }}
+          />
+        ))}
+      </div>
+      <input
+        type="text"
+        className={styles.hexInput}
+        value={hex}
+        maxLength={7}
+        placeholder="#rrggbb"
+        onChange={(e) => {
+          const v = e.target.value;
+          setHex(v);
+          if (/^#[0-9a-fA-F]{6}$/.test(v)) onChange(v);
+        }}
+        onBlur={() => {
+          if (!/^#[0-9a-fA-F]{6}$/.test(hex)) setHex(value);
+          else commit(hex);
+        }}
+      />
+    </div>
+  );
+}
+
+interface FontSizeControlProps {
+  value: number;
+  onDecrease: () => void;
+  onIncrease: () => void;
+}
+
+function FontSizeControl({ value, onDecrease, onIncrease }: FontSizeControlProps) {
+  return (
+    <div className={styles.formatSection}>
+      <span className={styles.formatLabel}>Font Size</span>
+      <div className={styles.fontSizeRow}>
+        <button type="button" className={styles.fontSizeBtn} onClick={onDecrease}>−</button>
+        <span className={styles.fontSizeValue}>{value}</span>
+        <button type="button" className={styles.fontSizeBtn} onClick={onIncrease}>+</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main whiteboard ───────────────────────────────────────────────────────────
 
 function WhiteboardInner() {
   const layers = useYjsStore();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const selectedIdsRef = useRef<Set<string>>(new Set());
+
+  // Marquee
+  const [marquee, setMarquee] = useState<{
+    startSx: number; startSy: number; currentSx: number; currentSy: number;
+  } | null>(null);
+  const isMarqueeRef = useRef(false);
+
+  // Pan
   const panStartRef = useRef<{ x: number; y: number; startPanX: number; startPanY: number } | null>(null);
+
+  // Drag (batch movement)
+  const dragStartPositions = useRef<
+    Map<string, { x: number; y: number; points?: [number, number][] }>
+  >(new Map());
+
+  // Clipboard
+  const clipboardRef = useRef<LayerData[]>([]);
+
+  // Space key state (both ref for handlers + state for re-renders)
+  const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const isSpaceDownRef = useRef(false);
+
+  // Help modal
+  const [showHelp, setShowHelp] = useState(false);
+  const showHelpRef = useRef(false);
+  showHelpRef.current = showHelp;
+
   const { user } = useUser();
   const {
     pan,
@@ -45,25 +201,35 @@ function WhiteboardInner() {
     containerRef,
     transformRef,
     screenToWorld,
+    toolMode,
+    setToolMode,
   } = useBoardTransform();
+
+  // Effective hand mode: persistent hand tool OR space held
+  const isHandMode = toolMode === "hand" || isSpaceDown;
+
+  // ── Sync selection to ref ───────────────────────────────────────────────
+
+  const updateSelectedIds = useCallback((next: Set<string>) => {
+    selectedIdsRef.current = next;
+    setSelectedIds(next);
+  }, []);
+
+  // ── Screen → world helpers ──────────────────────────────────────────────
 
   const getScreenPos = useCallback(
     (e: { clientX: number; clientY: number }) => {
       const el = containerRef.current;
       if (!el) return null;
       const rect = el.getBoundingClientRect();
-      return {
-        sx: e.clientX - rect.left,
-        sy: e.clientY - rect.top,
-      };
+      return { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
     },
     [containerRef]
   );
 
-  // Start persistence (load from DB, start save timer) as soon as the board mounts.
-  useEffect(() => {
-    ensurePersistence();
-  }, []);
+  // ── Effects ─────────────────────────────────────────────────────────────
+
+  useEffect(() => { ensurePersistence(); }, []);
 
   useEffect(() => {
     const awareness = getAwareness();
@@ -74,6 +240,81 @@ function WhiteboardInner() {
       cursor: null,
     });
   }, [user]);
+
+  // ── Selection handler ───────────────────────────────────────────────────
+
+  /**
+   * Called by child objects on pointer-down.
+   * Key fix: clicking an already-selected item (without Shift) keeps the
+   * entire group selected so it can be dragged as one.
+   */
+  const handleSelect = useCallback(
+    (id: string, shiftKey: boolean) => {
+      const prev = selectedIdsRef.current;
+      if (!shiftKey && prev.has(id)) {
+        // Already in selection — preserve group for potential drag
+        return;
+      }
+      let next: Set<string>;
+      if (shiftKey) {
+        next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      } else {
+        next = new Set([id]);
+      }
+      selectedIdsRef.current = next;
+      setSelectedIds(next);
+    },
+    []
+  );
+
+  // ── Batch drag handlers ─────────────────────────────────────────────────
+
+  const handleDragStart = useCallback((draggedId: string) => {
+    const ids = new Set(selectedIdsRef.current);
+    if (!ids.has(draggedId)) ids.add(draggedId);
+
+    const positions = new Map<string, { x: number; y: number; points?: [number, number][] }>();
+    for (const id of ids) {
+      const layer = sharedLayers.get(id);
+      if (!layer) continue;
+      if (layer.type === "line") {
+        positions.set(id, { x: layer.x, y: layer.y, points: layer.points.map((p) => [p[0], p[1]]) });
+      } else {
+        positions.set(id, { x: layer.x, y: layer.y });
+      }
+    }
+    dragStartPositions.current = positions;
+  }, []);
+
+  /**
+   * All updates — including the primary dragged object — go through a single
+   * ydoc.transact so there is no double-write and everything is one undo step.
+   */
+  const handleDragDelta = useCallback((dx: number, dy: number) => {
+    ydoc.transact(() => {
+      for (const [id, startPos] of dragStartPositions.current) {
+        const layer = sharedLayers.get(id);
+        if (!layer) continue;
+        if (layer.type === "line") {
+          const newPoints = (startPos.points as [number, number][]).map(
+            ([px, py]) => [px + dx, py + dy] as [number, number]
+          );
+          const { x, y } = lineBboxOrigin(newPoints);
+          sharedLayers.set(id, { ...layer, points: newPoints, x, y });
+        } else {
+          sharedLayers.set(id, { ...layer, x: startPos.x + dx, y: startPos.y + dy });
+        }
+      }
+    });
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    dragStartPositions.current = new Map();
+  }, []);
+
+  // ── Cursor awareness ────────────────────────────────────────────────────
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -99,6 +340,8 @@ function WhiteboardInner() {
     awareness.setLocalStateField("user", { ...prev, cursor: null });
   }, []);
 
+  // ── Zoom ────────────────────────────────────────────────────────────────
+
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
@@ -109,29 +352,36 @@ function WhiteboardInner() {
       const worldY = (pos.sy - p.y) / z;
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
       const newZoom = z + delta;
-      setPan({
-        x: pos.sx - worldX * newZoom,
-        y: pos.sy - worldY * newZoom,
-      });
+      setPan({ x: pos.sx - worldX * newZoom, y: pos.sy - worldY * newZoom });
       setZoom(newZoom);
     },
     [getScreenPos, transformRef, setPan, setZoom]
   );
 
+  // ── Board pointer (pan / marquee) ───────────────────────────────────────
+
   const handleBoardPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      setSelectedId(null);
+      const handMode = toolMode === "hand" || isSpaceDown;
+
+      if (e.button === 1 || (e.button === 0 && handMode)) {
+        panStartRef.current = { x: e.clientX, y: e.clientY, startPanX: pan.x, startPanY: pan.y };
+        isMarqueeRef.current = false;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        return;
+      }
+
       if (e.button === 0) {
-        panStartRef.current = {
-          x: e.clientX,
-          y: e.clientY,
-          startPanX: pan.x,
-          startPanY: pan.y,
-        };
+        const pos = getScreenPos(e);
+        if (pos) {
+          setMarquee({ startSx: pos.sx, startSy: pos.sy, currentSx: pos.sx, currentSy: pos.sy });
+          isMarqueeRef.current = true;
+        }
+        panStartRef.current = null;
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [pan]
+    [pan, getScreenPos, toolMode, isSpaceDown]
   );
 
   const handleBoardPointerMove = useCallback(
@@ -141,39 +391,249 @@ function WhiteboardInner() {
           x: panStartRef.current.startPanX + e.clientX - panStartRef.current.x,
           y: panStartRef.current.startPanY + e.clientY - panStartRef.current.y,
         });
+      } else if (isMarqueeRef.current) {
+        const pos = getScreenPos(e);
+        if (pos) {
+          setMarquee((prev) => prev ? { ...prev, currentSx: pos.sx, currentSy: pos.sy } : null);
+        }
       }
     },
-    [setPan]
+    [setPan, getScreenPos]
   );
 
-  const handleBoardPointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      panStartRef.current = null;
+  const handleBoardPointerUp = useCallback(
+    (e: React.PointerEvent) => {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    }
+
+      if (panStartRef.current) {
+        panStartRef.current = null;
+        return;
+      }
+
+      if (isMarqueeRef.current) {
+        isMarqueeRef.current = false;
+        setMarquee((prevMarquee) => {
+          if (!prevMarquee) return null;
+          const { startSx, startSy, currentSx, currentSy } = prevMarquee;
+          const dragW = Math.abs(currentSx - startSx);
+          const dragH = Math.abs(currentSy - startSy);
+
+          if (dragW < 4 && dragH < 4) {
+            if (!e.shiftKey) updateSelectedIds(new Set());
+            return null;
+          }
+
+          const mx1 = Math.min(startSx, currentSx);
+          const my1 = Math.min(startSy, currentSy);
+          const mx2 = Math.max(startSx, currentSx);
+          const my2 = Math.max(startSy, currentSy);
+          const w1 = screenToWorld(mx1, my1);
+          const w2 = screenToWorld(mx2, my2);
+
+          const hit = new Set<string>();
+          for (const [id, layer] of sharedLayers.entries()) {
+            if (!layer) continue;
+            const bbox = getLayerBBox(layer);
+            if (bbox.x2 >= w1.x && bbox.x1 <= w2.x && bbox.y2 >= w1.y && bbox.y1 <= w2.y) {
+              hit.add(id);
+            }
+          }
+
+          const next = e.shiftKey ? new Set([...selectedIdsRef.current, ...hit]) : hit;
+          updateSelectedIds(next);
+          return null;
+        });
+      }
+    },
+    [screenToWorld, updateSelectedIds]
+  );
+
+  // ── Formatting actions ──────────────────────────────────────────────────
+
+  const applyFillColor = useCallback((color: string) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (!layer) continue;
+        if (layer.type === "rectangle" || layer.type === "circle") {
+          sharedLayers.set(id, { ...layer, fill: color });
+        } else if (layer.type === "sticky") {
+          sharedLayers.set(id, { ...layer, bgColor: color });
+        }
+      }
+    });
   }, []);
+
+  const applyTextColor = useCallback((color: string) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (layer?.type === "text") {
+          sharedLayers.set(id, { ...layer, color });
+        }
+      }
+    });
+  }, []);
+
+  const applyStrokeColor = useCallback((color: string) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (layer?.type === "line") {
+          sharedLayers.set(id, { ...layer, color });
+        }
+      }
+    });
+  }, []);
+
+  const applyFontSizeDelta = useCallback((delta: number) => {
+    ydoc.transact(() => {
+      for (const id of selectedIdsRef.current) {
+        const layer = sharedLayers.get(id);
+        if (!layer) continue;
+        if (layer.type === "text") {
+          sharedLayers.set(id, { ...layer, fontSize: Math.max(8, Math.min(96, layer.fontSize + delta)) });
+        } else if (layer.type === "sticky") {
+          const cur = layer.fontSize ?? 14;
+          sharedLayers.set(id, { ...layer, fontSize: Math.max(8, Math.min(96, cur + delta)) });
+        }
+      }
+    });
+  }, []);
+
+  // ── Keyboard shortcuts ──────────────────────────────────────────────────
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isEditing =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable;
+
+      // Space: temporary hand mode (not while editing)
+      if (e.key === " " && !isEditing) {
+        e.preventDefault();
+        if (!isSpaceDownRef.current) {
+          isSpaceDownRef.current = true;
+          setIsSpaceDown(true);
+        }
+        return;
+      }
+
+      // Tool mode toggle (not while editing, not when a modifier is held)
+      const mod = e.metaKey || e.ctrlKey;
+      if (!isEditing && !mod) {
+        if (e.key === "v" || e.key === "V") { setToolMode("select"); return; }
+        if (e.key === "h" || e.key === "H") { setToolMode("hand"); return; }
+        if (e.key === "?") { setShowHelp((v) => !v); return; }
+      }
+
+      if (isEditing) return;
+
+      // Delete / Backspace
       if (e.key === "Delete" || e.key === "Backspace") {
-        const target = e.target as HTMLElement;
-        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-          return;
+        e.preventDefault();
+        const ids = selectedIdsRef.current;
+        if (ids.size > 0) {
+          ydoc.transact(() => { for (const id of ids) sharedLayers.delete(id); });
+          updateSelectedIds(new Set());
         }
-        if (selectedId) {
-          e.preventDefault();
-          sharedLayers.delete(selectedId);
-          setSelectedId(null);
+        return;
+      }
+
+      // Escape — skip deselect when the help modal is consuming it
+      if (e.key === "Escape") {
+        if (!showHelpRef.current) updateSelectedIds(new Set());
+        return;
+      }
+
+      // Ctrl+A — select all
+      if (mod && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        updateSelectedIds(new Set(sharedLayers.keys()));
+        return;
+      }
+
+      // Ctrl+D — duplicate
+      if (mod && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        const ids = selectedIdsRef.current;
+        if (ids.size === 0) return;
+        const newIds = new Set<string>();
+        ydoc.transact(() => {
+          for (const id of ids) {
+            const layer = sharedLayers.get(id);
+            if (!layer) continue;
+            const newId = generateId(layer.type);
+            if (layer.type === "line") {
+              sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: layer.points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
+            } else {
+              sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET });
+            }
+            newIds.add(newId);
+          }
+        });
+        updateSelectedIds(newIds);
+        return;
+      }
+
+      // Ctrl+C — copy
+      if (mod && (e.key === "c" || e.key === "C")) {
+        const ids = selectedIdsRef.current;
+        const copied: LayerData[] = [];
+        for (const id of ids) {
+          const layer = sharedLayers.get(id);
+          if (layer) copied.push({ ...layer } as LayerData);
         }
+        clipboardRef.current = copied;
+        return;
+      }
+
+      // Ctrl+V — paste
+      if (mod && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        if (clipboardRef.current.length === 0) return;
+        const newIds = new Set<string>();
+        ydoc.transact(() => {
+          for (const layer of clipboardRef.current) {
+            const newId = generateId(layer.type);
+            if (layer.type === "line") {
+              sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: (layer as LineLayer).points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
+            } else {
+              sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET });
+            }
+            newIds.add(newId);
+          }
+        });
+        // Shift clipboard so repeated pastes don't stack
+        clipboardRef.current = clipboardRef.current.map((l) =>
+          l.type === "line"
+            ? { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET, points: (l as LineLayer).points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) }
+            : { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET }
+        ) as LayerData[];
+        updateSelectedIds(newIds);
+        return;
       }
     };
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " " && isSpaceDownRef.current) {
+        isSpaceDownRef.current = false;
+        setIsSpaceDown(false);
+      }
+    };
+
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedId]);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, [updateSelectedIds, setToolMode]);
 
-  // ── Layer creation helpers ────────────────────────────────────────────────
+  // ── Layer creation ──────────────────────────────────────────────────────
 
-  /** Returns the world-space center of the viewport so new items appear in view. */
   const viewportCenter = useCallback((): { x: number; y: number } => {
     const el = containerRef.current;
     if (!el) return { x: 150, y: 150 };
@@ -183,97 +643,119 @@ function WhiteboardInner() {
 
   const addSticky = useCallback(() => {
     const { x, y } = viewportCenter();
-    const id = `sticky-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    sharedLayers.set(id, {
-      type: "sticky",
-      x: x - DEFAULT_STICKY_WIDTH / 2,
-      y: y - DEFAULT_STICKY_HEIGHT / 2,
-      width: DEFAULT_STICKY_WIDTH,
-      height: DEFAULT_STICKY_HEIGHT,
-      text: "New note",
-    });
-    setSelectedId(id);
-  }, [viewportCenter]);
+    const id = generateId("sticky");
+    sharedLayers.set(id, { type: "sticky", x: x - DEFAULT_STICKY_WIDTH / 2, y: y - DEFAULT_STICKY_HEIGHT / 2, width: DEFAULT_STICKY_WIDTH, height: DEFAULT_STICKY_HEIGHT, text: "New note" });
+    updateSelectedIds(new Set([id]));
+  }, [viewportCenter, updateSelectedIds]);
 
   const addRectangle = useCallback(() => {
     const { x, y } = viewportCenter();
-    const id = `rect-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    sharedLayers.set(id, {
-      type: "rectangle",
-      x: x - DEFAULT_RECT_SIZE / 2,
-      y: y - DEFAULT_RECT_SIZE / 2,
-      width: DEFAULT_RECT_SIZE,
-      height: DEFAULT_RECT_SIZE,
-      fill: "#93c5fd",
-    });
-    setSelectedId(id);
-  }, [viewportCenter]);
+    const id = generateId("rect");
+    sharedLayers.set(id, { type: "rectangle", x: x - DEFAULT_RECT_SIZE / 2, y: y - DEFAULT_RECT_SIZE / 2, width: DEFAULT_RECT_SIZE, height: DEFAULT_RECT_SIZE, fill: "#93c5fd" });
+    updateSelectedIds(new Set([id]));
+  }, [viewportCenter, updateSelectedIds]);
 
   const addCircle = useCallback(() => {
     const { x, y } = viewportCenter();
-    const id = `circle-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    sharedLayers.set(id, {
-      type: "circle",
-      x: x - DEFAULT_CIRCLE_SIZE / 2,
-      y: y - DEFAULT_CIRCLE_SIZE / 2,
-      width: DEFAULT_CIRCLE_SIZE,
-      height: DEFAULT_CIRCLE_SIZE,
-      fill: "#86efac",
-    });
-    setSelectedId(id);
-  }, [viewportCenter]);
+    const id = generateId("circle");
+    sharedLayers.set(id, { type: "circle", x: x - DEFAULT_CIRCLE_SIZE / 2, y: y - DEFAULT_CIRCLE_SIZE / 2, width: DEFAULT_CIRCLE_SIZE, height: DEFAULT_CIRCLE_SIZE, fill: "#86efac" });
+    updateSelectedIds(new Set([id]));
+  }, [viewportCenter, updateSelectedIds]);
 
   const addText = useCallback(() => {
     const { x, y } = viewportCenter();
-    const id = `text-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    sharedLayers.set(id, {
-      type: "text",
-      x: x - DEFAULT_TEXT_WIDTH / 2,
-      y: y - DEFAULT_TEXT_HEIGHT / 2,
-      width: DEFAULT_TEXT_WIDTH,
-      height: DEFAULT_TEXT_HEIGHT,
-      text: "Text",
-      fontSize: 16,
-      fontWeight: "normal",
-      color: "#1e293b",
-    });
-    setSelectedId(id);
-  }, [viewportCenter]);
+    const id = generateId("text");
+    sharedLayers.set(id, { type: "text", x: x - DEFAULT_TEXT_WIDTH / 2, y: y - DEFAULT_TEXT_HEIGHT / 2, width: DEFAULT_TEXT_WIDTH, height: DEFAULT_TEXT_HEIGHT, text: "Text", fontSize: 16, fontWeight: "normal", color: "#1e293b" });
+    updateSelectedIds(new Set([id]));
+  }, [viewportCenter, updateSelectedIds]);
 
   const addLine = useCallback(
     (lineVariant: "straight" | "arrow") => {
       const { x, y } = viewportCenter();
-      const id = `line-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const id = generateId("line");
       const x1 = x - DEFAULT_LINE_LENGTH / 2;
       const x2 = x + DEFAULT_LINE_LENGTH / 2;
-      sharedLayers.set(id, {
-        type: "line",
-        x: x1,
-        y,
-        points: [
-          [x1, y],
-          [x2, y],
-        ],
-        color: "#1e293b",
-        thickness: 2,
-        variant: lineVariant,
-      });
-      setSelectedId(id);
+      sharedLayers.set(id, { type: "line", x: x1, y, points: [[x1, y], [x2, y]], color: "#1e293b", thickness: 2, variant: lineVariant });
+      updateSelectedIds(new Set([id]));
     },
-    [viewportCenter]
+    [viewportCenter, updateSelectedIds]
   );
 
   const resetView = useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    setPan({
-      x: centerX - 100,
-      y: centerY - 100,
-    });
+    setPan({ x: rect.width / 2 - 100, y: rect.height / 2 - 100 });
     setZoom(1.0);
   }, [containerRef, setPan, setZoom]);
+
+  const deleteSelected = useCallback(() => {
+    const ids = selectedIdsRef.current;
+    if (ids.size === 0) return;
+    ydoc.transact(() => { for (const id of ids) sharedLayers.delete(id); });
+    updateSelectedIds(new Set());
+  }, [updateSelectedIds]);
+
+  const duplicateSelected = useCallback(() => {
+    const ids = selectedIdsRef.current;
+    if (ids.size === 0) return;
+    const newIds = new Set<string>();
+    ydoc.transact(() => {
+      for (const id of ids) {
+        const layer = sharedLayers.get(id);
+        if (!layer) continue;
+        const newId = generateId(layer.type);
+        if (layer.type === "line") {
+          sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET, points: layer.points.map(([px, py]) => [px + PASTE_OFFSET, py + PASTE_OFFSET]) });
+        } else {
+          sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET });
+        }
+        newIds.add(newId);
+      }
+    });
+    updateSelectedIds(newIds);
+  }, [updateSelectedIds]);
+
+  // ── Derive formatting state from selection ──────────────────────────────
+
+  const selectedLayers = Array.from(selectedIds)
+    .map((id) => layers.get(id))
+    .filter(Boolean) as LayerData[];
+
+  const hasFillable = selectedLayers.some(
+    (l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky"
+  );
+  const hasText = selectedLayers.some((l) => l.type === "text");
+  const hasStickyOrText = selectedLayers.some((l) => l.type === "sticky" || l.type === "text");
+  const hasLine = selectedLayers.some((l) => l.type === "line");
+  const hasSelection = selectedIds.size > 0;
+
+  const firstFillable = selectedLayers.find(
+    (l) => l.type === "rectangle" || l.type === "circle" || l.type === "sticky"
+  );
+  const currentFillColor =
+    firstFillable?.type === "sticky"
+      ? (firstFillable as StickyLayer).bgColor ?? "#fffbeb"
+      : firstFillable?.type === "rectangle" || firstFillable?.type === "circle"
+      ? (firstFillable as RectangleLayer).fill ?? "#93c5fd"
+      : "#ffffff";
+
+  const firstText = selectedLayers.find((l) => l.type === "text") as TextLayer | undefined;
+  const currentTextColor = firstText?.color ?? "#1e293b";
+
+  const firstLine = selectedLayers.find((l) => l.type === "line") as LineLayer | undefined;
+  const currentStrokeColor = firstLine?.color ?? "#1e293b";
+
+  const firstStickyOrText = selectedLayers.find(
+    (l) => l.type === "sticky" || l.type === "text"
+  );
+  const currentFontSize =
+    firstStickyOrText?.type === "text"
+      ? (firstStickyOrText as TextLayer).fontSize
+      : firstStickyOrText?.type === "sticky"
+      ? (firstStickyOrText as StickyLayer).fontSize ?? 14
+      : 14;
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   const layerEntries = Array.from(layers.entries());
 
@@ -286,190 +768,203 @@ function WhiteboardInner() {
       onPointerLeave={handlePointerLeave}
       onWheel={handleWheel}
     >
-      {/* Pan handle layer */}
+      {/* Fallback pan/marquee layer (select mode, empty canvas) */}
       <div
         data-pan-handle
-        className={`${styles.panHandle} ${panStartRef.current ? styles.panHandleGrabbing : styles.panHandleGrab}`}
+        className={`${styles.panHandle} ${styles.panHandleCrosshair}`}
         onPointerDown={handleBoardPointerDown}
         onPointerMove={handleBoardPointerMove}
         onPointerUp={handleBoardPointerUp}
         onPointerLeave={handleBoardPointerUp}
       />
 
-      {/* Infinite world: transformed */}
+      {/* Infinite world */}
       <div
         className={styles.worldTransform}
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-        }}
+        style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
       >
         {layerEntries.map(([id, layer]) => {
           if (!layer) return null;
+          const selected = selectedIds.has(id);
 
-          if (layer.type === "sticky") {
-            return (
-              <StickyNote
-                key={id}
-                id={id}
-                layer={layer as StickyLayer}
-                selected={selectedId === id}
-                onSelect={() => setSelectedId(id)}
-                screenToWorld={screenToWorld}
-                getScreenPos={getScreenPos}
-              />
-            );
-          }
-
-          if (layer.type === "rectangle") {
-            return (
-              <ShapeRectangle
-                key={id}
-                id={id}
-                layer={layer as RectangleLayer}
-                selected={selectedId === id}
-                onSelect={() => setSelectedId(id)}
-                screenToWorld={screenToWorld}
-                getScreenPos={getScreenPos}
-              />
-            );
-          }
-
-          if (layer.type === "circle") {
-            return (
-              <ShapeCircle
-                key={id}
-                id={id}
-                layer={layer as CircleLayer}
-                selected={selectedId === id}
-                onSelect={() => setSelectedId(id)}
-                screenToWorld={screenToWorld}
-                getScreenPos={getScreenPos}
-              />
-            );
-          }
-
-          if (layer.type === "text") {
-            return (
-              <TextElement
-                key={id}
-                id={id}
-                layer={layer as TextLayer}
-                selected={selectedId === id}
-                onSelect={() => setSelectedId(id)}
-                screenToWorld={screenToWorld}
-                getScreenPos={getScreenPos}
-              />
-            );
-          }
-
-          if (layer.type === "line") {
-            return (
-              <LineElement
-                key={id}
-                id={id}
-                layer={layer as LineLayer}
-                selected={selectedId === id}
-                onSelect={() => setSelectedId(id)}
-                screenToWorld={screenToWorld}
-                getScreenPos={getScreenPos}
-              />
-            );
-          }
-
+          if (layer.type === "sticky") return (
+            <StickyNote key={id} id={id} layer={layer as StickyLayer} selected={selected}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
+          );
+          if (layer.type === "rectangle") return (
+            <ShapeRectangle key={id} id={id} layer={layer as RectangleLayer} selected={selected}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
+          );
+          if (layer.type === "circle") return (
+            <ShapeCircle key={id} id={id} layer={layer as CircleLayer} selected={selected}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
+          );
+          if (layer.type === "text") return (
+            <TextElement key={id} id={id} layer={layer as TextLayer} selected={selected}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
+          );
+          if (layer.type === "line") return (
+            <LineElement key={id} id={id} layer={layer as LineLayer} selected={selected}
+              onSelect={(sk) => handleSelect(id, sk)}
+              onDragStart={() => handleDragStart(id)}
+              onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
+              screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
+          );
           return null;
         })}
       </div>
 
+      {/* Hand-mode overlay — covers objects so all drags pan instead of select */}
+      {isHandMode && (
+        <div
+          className={styles.handOverlay}
+          onPointerDown={handleBoardPointerDown}
+          onPointerMove={handleBoardPointerMove}
+          onPointerUp={handleBoardPointerUp}
+          onPointerLeave={handleBoardPointerUp}
+        />
+      )}
+
+      {/* Marquee rectangle (screen space) */}
+      {marquee && (
+        <div
+          className={styles.marquee}
+          style={{
+            left: Math.min(marquee.startSx, marquee.currentSx),
+            top: Math.min(marquee.startSy, marquee.currentSy),
+            width: Math.abs(marquee.currentSx - marquee.startSx),
+            height: Math.abs(marquee.currentSy - marquee.startSy),
+          }}
+        />
+      )}
+
       <Avatars />
       <CursorPresence />
 
-      {/* Vertical Toolbar */}
+      {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className={styles.toolbar}>
-        <button
-          type="button"
-          onClick={addSticky}
-          className={`${styles.toolbarButton} ${styles.addStickyButton}`}
-          title="Add Sticky Note"
-        >
-          <StickyIcon size={20} />
-          <span className={styles.buttonLabel}>Sticky</span>
-        </button>
 
-        <button
-          type="button"
-          onClick={addRectangle}
-          className={`${styles.toolbarButton} ${styles.addRectangleButton}`}
-          title="Add Rectangle"
-        >
-          <Square size={20} />
-          <span className={styles.buttonLabel}>Rectangle</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={addCircle}
-          className={`${styles.toolbarButton} ${styles.addCircleButton}`}
-          title="Add Circle"
-        >
-          <Circle size={20} />
-          <span className={styles.buttonLabel}>Circle</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={addText}
-          className={`${styles.toolbarButton} ${styles.addTextButton}`}
-          title="Add Text"
-        >
-          <Type size={20} />
-          <span className={styles.buttonLabel}>Text</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => addLine("straight")}
-          className={`${styles.toolbarButton} ${styles.addLineButton}`}
-          title="Add Line"
-        >
-          <MoveUpRight size={20} />
-          <span className={styles.buttonLabel}>Line</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => addLine("arrow")}
-          className={`${styles.toolbarButton} ${styles.addArrowButton}`}
-          title="Add Arrow"
-        >
-          <MoveUpRight size={20} className={styles.arrowIcon} />
-          <span className={styles.buttonLabel}>Arrow</span>
-        </button>
-
-        {selectedId && (
+        {/* Tool mode buttons */}
+        <div className={styles.toolModeGroup}>
           <button
             type="button"
-            onClick={() => {
-              sharedLayers.delete(selectedId);
-              setSelectedId(null);
-            }}
-            className={`${styles.toolbarButton} ${styles.deleteButton}`}
-            title="Delete Selected"
+            title="Select (V)"
+            className={`${styles.toolModeBtn} ${toolMode === "select" && !isSpaceDown ? styles.toolModeBtnActive : ""}`}
+            onClick={() => setToolMode("select")}
           >
-            <Trash2 size={20} />
-            <span className={styles.buttonLabel}>Delete</span>
+            <MousePointer2 size={16} />
           </button>
+          <button
+            type="button"
+            title="Hand / Pan (H)"
+            className={`${styles.toolModeBtn} ${toolMode === "hand" || isSpaceDown ? styles.toolModeBtnActive : ""}`}
+            onClick={() => setToolMode("hand")}
+          >
+            <Hand size={16} />
+          </button>
+        </div>
+
+        <div className={styles.toolbarDivider} />
+
+        {/* Shape creation */}
+        <button type="button" onClick={addSticky} className={`${styles.toolbarButton} ${styles.addStickyButton}`} title="Add Sticky Note">
+          <StickyIcon size={20} /><span className={styles.buttonLabel}>Sticky</span>
+        </button>
+        <button type="button" onClick={addRectangle} className={`${styles.toolbarButton} ${styles.addRectangleButton}`} title="Add Rectangle">
+          <Square size={20} /><span className={styles.buttonLabel}>Rectangle</span>
+        </button>
+        <button type="button" onClick={addCircle} className={`${styles.toolbarButton} ${styles.addCircleButton}`} title="Add Circle">
+          <Circle size={20} /><span className={styles.buttonLabel}>Circle</span>
+        </button>
+        <button type="button" onClick={addText} className={`${styles.toolbarButton} ${styles.addTextButton}`} title="Add Text">
+          <Type size={20} /><span className={styles.buttonLabel}>Text</span>
+        </button>
+        <button type="button" onClick={() => addLine("straight")} className={`${styles.toolbarButton} ${styles.addLineButton}`} title="Add Line">
+          <MoveUpRight size={20} /><span className={styles.buttonLabel}>Line</span>
+        </button>
+        <button type="button" onClick={() => addLine("arrow")} className={`${styles.toolbarButton} ${styles.addArrowButton}`} title="Add Arrow">
+          <MoveUpRight size={20} className={styles.arrowIcon} /><span className={styles.buttonLabel}>Arrow</span>
+        </button>
+
+        {/* Formatting — only shown when something is selected */}
+        {hasSelection && (
+          <>
+            <div className={styles.toolbarDivider} />
+
+            {hasStickyOrText && (
+              <FontSizeControl
+                value={currentFontSize}
+                onDecrease={() => applyFontSizeDelta(-2)}
+                onIncrease={() => applyFontSizeDelta(2)}
+              />
+            )}
+
+            {hasFillable && (
+              <ColorPalette
+                label="Fill"
+                value={currentFillColor}
+                onChange={applyFillColor}
+              />
+            )}
+
+            {hasText && (
+              <ColorPalette
+                label="Text Color"
+                value={currentTextColor}
+                onChange={applyTextColor}
+              />
+            )}
+
+            {hasLine && (
+              <ColorPalette
+                label="Stroke"
+                value={currentStrokeColor}
+                onChange={applyStrokeColor}
+              />
+            )}
+
+            <div className={styles.toolbarDivider} />
+
+            <button type="button" onClick={duplicateSelected} className={`${styles.toolbarButton} ${styles.duplicateButton}`} title="Duplicate (⌘D)">
+              <Copy size={20} /><span className={styles.buttonLabel}>Duplicate</span>
+            </button>
+            <button type="button" onClick={deleteSelected} className={`${styles.toolbarButton} ${styles.deleteButton}`} title="Delete (Del)">
+              <Trash2 size={20} /><span className={styles.buttonLabel}>Delete</span>
+            </button>
+          </>
         )}
 
-        <button
-          type="button"
-          onClick={resetView}
-          className={`${styles.toolbarButton} ${styles.resetButton}`}
-          title="Reset View"
-        >
-          <Home size={20} />
-          <span className={styles.buttonLabel}>Reset</span>
+        <div className={styles.toolbarDivider} />
+
+        <button type="button" onClick={resetView} className={`${styles.toolbarButton} ${styles.resetButton}`} title="Reset View">
+          <Home size={20} /><span className={styles.buttonLabel}>Reset</span>
         </button>
       </div>
+
+      {/* Help button (bottom-right) */}
+      <button
+        type="button"
+        className={styles.helpButton}
+        onClick={() => setShowHelp(true)}
+        title="Keyboard shortcuts (?)"
+      >
+        <HelpCircle size={18} />
+      </button>
+
+      {/* Help modal */}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

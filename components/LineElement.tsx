@@ -5,10 +5,8 @@ import type { LineLayer } from "@/lib/yjs-store";
 import { sharedLayers } from "@/lib/yjs-store";
 import styles from "./LineElement.module.css";
 
-/** Extra space around the bounding box so thick strokes / arrowheads aren't clipped. */
 const SVG_PAD = 20;
 
-/** Recompute bounding-box origin from a points array. */
 function bboxOrigin(pts: [number, number][]): { x: number; y: number } {
   let minX = Infinity;
   let minY = Infinity;
@@ -23,25 +21,37 @@ interface LineElementProps {
   id: string;
   layer: LineLayer;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
+  onDragStart: () => void;
+  onDragDelta: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
   screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   getScreenPos: (e: { clientX: number; clientY: number }) => { sx: number; sy: number } | null;
 }
 
-function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScreenPos }: LineElementProps) {
+function LineElementInner({
+  id,
+  layer,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragDelta,
+  onDragEnd,
+  screenToWorld,
+  getScreenPos,
+}: LineElementProps) {
   const { points, color, thickness, variant } = layer;
 
-  const bodyDragRef = useRef<{
-    startWx: number;
-    startWy: number;
+  // Body drag: world position at drag start (for computing cumulative delta)
+  const bodyDragRef = useRef<{ startWx: number; startWy: number } | null>(null);
+
+  // Endpoint drag: moves a single point (bypasses batch drag)
+  const endpointDragRef = useRef<{
+    index: number;
     startPoints: [number, number][];
   } | null>(null);
 
-  const endpointDragRef = useRef<{
-    index: number;
-  } | null>(null);
-
-  const updateLayer = useCallback(
+  const updateLayerPoints = useCallback(
     (newPoints: [number, number][]) => {
       const current = sharedLayers.get(id) as LineLayer | undefined;
       if (!current || current.type !== "line") return;
@@ -65,7 +75,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
   const svgWidth = Math.max(maxX - minX + 2 * SVG_PAD, 2 * SVG_PAD);
   const svgHeight = Math.max(maxY - minY + 2 * SVG_PAD, 2 * SVG_PAD);
 
-  /** World point → SVG-local coordinate. */
   const toLocal = (p: [number, number]): [number, number] => [
     p[0] - svgLeft,
     p[1] - svgTop,
@@ -107,33 +116,34 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
   }
 
   // ── Event handlers ────────────────────────────────────────────────────────
+
   const handleBodyPointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button !== 0) return;
       const pos = getScreenPos(e);
       if (!pos) return;
       const world = screenToWorld(pos.sx, pos.sy);
-      bodyDragRef.current = {
-        startWx: world.x,
-        startWy: world.y,
-        startPoints: points.map((p) => [...p] as [number, number]),
-      };
+      bodyDragRef.current = { startWx: world.x, startWy: world.y };
+      onDragStart();
       (e.target as SVGElement).setPointerCapture(e.pointerId);
     },
-    [onSelect, getScreenPos, screenToWorld, points]
+    [onSelect, onDragStart, getScreenPos, screenToWorld]
   );
 
   const handleEndpointPointerDown = useCallback(
     (e: React.PointerEvent, index: number) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button !== 0) return;
-      endpointDragRef.current = { index };
+      endpointDragRef.current = {
+        index,
+        startPoints: points.map((p) => [...p] as [number, number]),
+      };
       (e.target as SVGElement).setPointerCapture(e.pointerId);
     },
-    [onSelect]
+    [onSelect, points]
   );
 
   const handlePointerMove = useCallback(
@@ -143,28 +153,32 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
       const world = screenToWorld(pos.sx, pos.sy);
 
       if (endpointDragRef.current) {
-        const { index } = endpointDragRef.current;
-        const newPoints: [number, number][] = points.map((p) => [...p] as [number, number]);
+        // Single-endpoint drag — direct update, bypasses batch
+        const { index, startPoints } = endpointDragRef.current;
+        const newPoints: [number, number][] = startPoints.map((p) => [...p] as [number, number]);
         newPoints[index] = [world.x, world.y];
-        updateLayer(newPoints);
+        updateLayerPoints(newPoints);
       } else if (bodyDragRef.current) {
-        const { startWx, startWy, startPoints } = bodyDragRef.current;
-        const dx = world.x - startWx;
-        const dy = world.y - startWy;
-        const newPoints: [number, number][] = startPoints.map(([px, py]) => [px + dx, py + dy]);
-        updateLayer(newPoints);
+        // Body drag — route through Whiteboard's batch handler
+        const dx = world.x - bodyDragRef.current.startWx;
+        const dy = world.y - bodyDragRef.current.startWy;
+        onDragDelta(dx, dy);
       }
     },
-    [points, updateLayer, getScreenPos, screenToWorld]
+    [points, updateLayerPoints, onDragDelta, getScreenPos, screenToWorld]
   );
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      bodyDragRef.current = null;
-      endpointDragRef.current = null;
-      (e.target as SVGElement).releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 0) {
+        bodyDragRef.current = null;
+        endpointDragRef.current = null;
+        onDragEnd();
+        (e.target as SVGElement).releasePointerCapture(e.pointerId);
+      }
+    },
+    [onDragEnd]
+  );
 
   const hitStrokeWidth = Math.max(16, thickness + 10);
 
@@ -176,7 +190,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
       onPointerUp={handlePointerUp}
       onPointerLeave={handlePointerUp}
     >
-      {/* Selection outline — rendered first (behind) */}
       {selected && pathD && (
         <path
           className={styles.selectionStroke}
@@ -185,7 +198,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         />
       )}
 
-      {/* Invisible wide hit area for dragging the body */}
       {pathD && (
         <path
           className={styles.hitStroke}
@@ -197,7 +209,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         />
       )}
 
-      {/* Visible line stroke */}
       {pathD && (
         <path
           className={styles.lineStroke}
@@ -207,7 +218,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         />
       )}
 
-      {/* Arrowhead polygon */}
       {variant === "arrow" && arrowPolygon && (
         <polygon
           className={styles.arrowHead}
@@ -216,7 +226,6 @@ function LineElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         />
       )}
 
-      {/* Endpoint drag handles (visible only when selected) */}
       {selected &&
         localPoints.map(([lx, ly], i) => (
           <circle

@@ -17,27 +17,48 @@ interface StickyNoteProps {
   id: string;
   layer: StickyLayer;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
+  onDragStart: () => void;
+  onDragDelta: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
   screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   getScreenPos: (e: { clientX: number; clientY: number }) => { sx: number; sy: number } | null;
 }
 
-export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getScreenPos }: StickyNoteProps) {
-  const { x, y, text, width = DEFAULT_WIDTH, height = DEFAULT_HEIGHT } = layer;
+export function StickyNote({
+  id,
+  layer,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragDelta,
+  onDragEnd,
+  screenToWorld,
+  getScreenPos,
+}: StickyNoteProps) {
+  const {
+    x,
+    y,
+    text,
+    width = DEFAULT_WIDTH,
+    height = DEFAULT_HEIGHT,
+    fontSize = 14,
+    bgColor = "#fffbeb",
+  } = layer;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(text);
-  const dragStartRef = useRef<{ offsetWx: number; offsetWy: number } | null>(null);
-  const resizeStartRef = useRef<{ handle: ResizeHandle; startX: number; startY: number; startWidth: number; startHeight: number; startPosX: number; startPosY: number } | null>(null);
 
-  const updatePos = useCallback(
-    (wx: number, wy: number) => {
-      const current = sharedLayers.get(id) as StickyLayer | undefined;
-      if (current?.type === "sticky") {
-        sharedLayers.set(id, { ...current, x: wx, y: wy });
-      }
-    },
-    [id]
-  );
+  // Body drag: stores world-space position at drag start
+  const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
+  const resizeStartRef = useRef<{
+    handle: ResizeHandle;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    startPosX: number;
+    startPosY: number;
+  } | null>(null);
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
@@ -55,8 +76,9 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
       const pos = getScreenPos(e);
       if (!pos) return;
       const world = screenToWorld(pos.sx, pos.sy);
-      
-      const { handle, startX, startY, startWidth, startHeight, startPosX, startPosY } = resizeStartRef.current;
+
+      const { handle, startX, startY, startWidth, startHeight, startPosX, startPosY } =
+        resizeStartRef.current;
       const dx = world.x - startX;
       const dy = world.y - startY;
 
@@ -90,20 +112,20 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
 
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // While editing, let the textarea handle its own pointer events
+      if (isEditing) return;
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        dragStartRef.current = {
-          offsetWx: layer.x - world.x,
-          offsetWy: layer.y - world.y,
-        };
+        dragStartRef.current = { startWorldX: world.x, startWorldY: world.y };
+        onDragStart();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [layer.x, layer.y, onSelect, getScreenPos, screenToWorld]
+    [isEditing, onSelect, onDragStart, getScreenPos, screenToWorld]
   );
 
   const handlePointerMove = useCallback(
@@ -114,24 +136,30 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        updatePos(world.x + dragStartRef.current.offsetWx, world.y + dragStartRef.current.offsetWy);
+        const dx = world.x - dragStartRef.current.startWorldX;
+        const dy = world.y - dragStartRef.current.startWorldY;
+        onDragDelta(dx, dy);
       }
     },
-    [updatePos, handleResizePointerMove, screenToWorld, getScreenPos]
+    [handleResizePointerMove, onDragDelta, screenToWorld, getScreenPos]
   );
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      dragStartRef.current = null;
-      resizeStartRef.current = null;
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 0) {
+        dragStartRef.current = null;
+        resizeStartRef.current = null;
+        onDragEnd();
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    },
+    [onDragEnd]
+  );
 
   const handleResizePointerDown = useCallback(
     (e: React.PointerEvent, handle: ResizeHandle) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
@@ -151,11 +179,14 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
     [x, y, width, height, onSelect, getScreenPos, screenToWorld]
   );
 
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setIsEditing(true);
-    setEditValue(layer.text);
-  }, [layer.text]);
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setIsEditing(true);
+      setEditValue(layer.text);
+    },
+    [layer.text]
+  );
 
   const commitText = useCallback(() => {
     setIsEditing(false);
@@ -183,16 +214,8 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
 
   return (
     <div
-      className={cn(
-        styles.stickyNote,
-        selected && styles.stickyNoteSelected
-      )}
-      style={{
-        left: x,
-        top: y,
-        width,
-        height,
-      }}
+      className={cn(styles.stickyNote, selected && styles.stickyNoteSelected)}
+      style={{ left: x, top: y, width, height, backgroundColor: bgColor }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -207,12 +230,10 @@ export function StickyNote({ id, layer, selected, onSelect, screenToWorld, getSc
           onBlur={commitText}
           onKeyDown={handleKeyDown}
           autoFocus
-          style={{ width: "100%", height: "100%" }}
+          style={{ width: "100%", height: "100%", fontSize }}
         />
       ) : (
-        <span className={styles.textDisplay}>
-          {text || "Sticky"}
-        </span>
+        <span className={styles.textDisplay} style={{ fontSize }}>{text || "Sticky"}</span>
       )}
       {selected && (
         <>

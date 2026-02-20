@@ -14,14 +14,27 @@ interface ShapeCircleProps {
   id: string;
   layer: CircleLayer;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
+  onDragStart: () => void;
+  onDragDelta: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
   screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   getScreenPos: (e: { clientX: number; clientY: number }) => { sx: number; sy: number } | null;
 }
 
-function ShapeCircleInner({ id, layer, selected, onSelect, screenToWorld, getScreenPos }: ShapeCircleProps) {
+function ShapeCircleInner({
+  id,
+  layer,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragDelta,
+  onDragEnd,
+  screenToWorld,
+  getScreenPos,
+}: ShapeCircleProps) {
   const { x, y, width, height, fill = "#86efac" } = layer;
-  const dragStartRef = useRef<{ offsetWx: number; offsetWy: number } | null>(null);
+  const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
   const resizeStartRef = useRef<{
     handle: ResizeHandle;
     startX: number;
@@ -32,16 +45,6 @@ function ShapeCircleInner({ id, layer, selected, onSelect, screenToWorld, getScr
     startPosY: number;
   } | null>(null);
   const shiftRef = useRef(false);
-
-  const updatePos = useCallback(
-    (wx: number, wy: number) => {
-      const current = sharedLayers.get(id) as CircleLayer | undefined;
-      if (current?.type === "circle") {
-        sharedLayers.set(id, { ...current, x: wx, y: wy });
-      }
-    },
-    [id]
-  );
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
@@ -95,7 +98,6 @@ function ShapeCircleInner({ id, layer, selected, onSelect, screenToWorld, getScr
         const dh = side - newHeight;
         newWidth = side;
         newHeight = side;
-        // Re-anchor the fixed corner
         if (handle === "sw") newX -= dw;
         else if (handle === "ne") newY -= dh;
         else if (handle === "nw") {
@@ -112,19 +114,17 @@ function ShapeCircleInner({ id, layer, selected, onSelect, screenToWorld, getScr
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        dragStartRef.current = {
-          offsetWx: layer.x - world.x,
-          offsetWy: layer.y - world.y,
-        };
+        dragStartRef.current = { startWorldX: world.x, startWorldY: world.y };
+        onDragStart();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [layer.x, layer.y, onSelect, getScreenPos, screenToWorld]
+    [onSelect, onDragStart, getScreenPos, screenToWorld]
   );
 
   const handlePointerMove = useCallback(
@@ -136,25 +136,32 @@ function ShapeCircleInner({ id, layer, selected, onSelect, screenToWorld, getScr
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        updatePos(world.x + dragStartRef.current.offsetWx, world.y + dragStartRef.current.offsetWy);
+        onDragDelta(
+          world.x - dragStartRef.current.startWorldX,
+          world.y - dragStartRef.current.startWorldY
+        );
       }
     },
-    [updatePos, handleResizePointerMove, screenToWorld, getScreenPos]
+    [handleResizePointerMove, onDragDelta, screenToWorld, getScreenPos]
   );
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      dragStartRef.current = null;
-      resizeStartRef.current = null;
-      shiftRef.current = false;
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 0) {
+        dragStartRef.current = null;
+        resizeStartRef.current = null;
+        shiftRef.current = false;
+        onDragEnd();
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    },
+    [onDragEnd]
+  );
 
   const handleResizePointerDown = useCallback(
     (e: React.PointerEvent, handle: ResizeHandle) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;

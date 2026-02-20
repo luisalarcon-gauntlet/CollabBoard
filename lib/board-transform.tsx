@@ -13,6 +13,8 @@ const MIN_ZOOM = 0.01;
 const MAX_ZOOM = 100;
 const ZOOM_STEP = 0.15;
 
+export type ToolMode = "select" | "hand";
+
 export interface BoardTransformValue {
   pan: { x: number; y: number };
   zoom: number;
@@ -25,6 +27,9 @@ export interface BoardTransformValue {
   /** Convert world coordinates to screen position (relative to board container) */
   worldToScreen: (wx: number, wy: number) => { x: number; y: number };
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /** Current interaction tool mode */
+  toolMode: ToolMode;
+  setToolMode: (mode: ToolMode) => void;
 }
 
 const BoardTransformContext = createContext<BoardTransformValue | null>(null);
@@ -37,6 +42,7 @@ export function BoardTransformProvider({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
+  const [toolMode, setToolMode] = useState<ToolMode>("select");
   const transformRef = useRef({ pan, zoom });
   transformRef.current = { pan, zoom };
 
@@ -70,6 +76,8 @@ export function BoardTransformProvider({
     screenToWorld,
     worldToScreen,
     containerRef,
+    toolMode,
+    setToolMode,
   };
 
   return (

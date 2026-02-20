@@ -11,7 +11,10 @@
 .panHandle {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  /* No z-index — sits beneath the worldTransform stacking context (which is
+     painted later in DOM order). Empty-canvas clicks fall through worldTransform
+     (pointer-events: none) and land here; shape clicks are caught by the shapes
+     directly since they have pointer-events: auto. */
 }
 
 .panHandleGrab {
@@ -22,12 +25,40 @@
   cursor: grabbing;
 }
 
+.panHandleCrosshair {
+  cursor: default;
+}
+
+/* Hand-mode overlay — sits above objects, below toolbar */
+.handOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  cursor: grab;
+}
+
+.handOverlay:active {
+  cursor: grabbing;
+}
+
 .worldTransform {
   position: absolute;
   inset: 0;
   transform-origin: top left;
   pointer-events: none;
 }
+
+/* Marquee selection rectangle */
+.marquee {
+  position: absolute;
+  background-color: rgba(59, 130, 246, 0.08);
+  border: 1.5px solid rgba(59, 130, 246, 0.6);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 500;
+}
+
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
 
 .toolbar {
   position: absolute;
@@ -37,13 +68,55 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 0.5rem;
+  gap: 0.375rem;
   border-radius: var(--radius-lg);
   border: 1px solid #e4e4e7;
-  background-color: rgba(255, 255, 255, 0.95);
-  padding: 0.75rem;
+  background-color: rgba(255, 255, 255, 0.97);
+  padding: 0.625rem;
   box-shadow: 0 4px 6px -1px var(--color-shadow);
-  z-index: 10;
+  z-index: 100;
+  min-width: 96px;
+  max-height: 90vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Tool mode row */
+.toolModeGroup {
+  display: flex;
+  gap: 4px;
+}
+
+.toolModeBtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.toolModeBtn:hover {
+  background: #f1f5f9;
+  color: #1e293b;
+}
+
+.toolModeBtnActive {
+  background: #eff6ff !important;
+  color: #2563eb !important;
+  border-color: #bfdbfe !important;
+}
+
+.toolbarDivider {
+  height: 1px;
+  background: #e4e4e7;
+  margin: 2px 0;
+  flex-shrink: 0;
 }
 
 .toolbarButton {
@@ -51,94 +124,159 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.25rem;
+  gap: 0.2rem;
   border-radius: var(--radius-md);
-  padding: 0.75rem;
+  padding: 0.5rem 0.375rem;
   font-size: 0.75rem;
   font-weight: 500;
   transition: all var(--transition-fast);
   border: none;
   cursor: pointer;
-  min-width: 70px;
 }
 
 .buttonLabel {
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   white-space: nowrap;
 }
 
-.addStickyButton {
-  background-color: #fef3c7;
-  color: #78350f;
+/* Shape creation buttons */
+.addStickyButton    { background-color: #fef3c7; color: #78350f; }
+.addStickyButton:hover { background-color: #fde68a; }
+.addRectangleButton { background-color: #dbeafe; color: #1e3a8a; }
+.addRectangleButton:hover { background-color: #bfdbfe; }
+.addCircleButton    { background-color: #dcfce7; color: #14532d; }
+.addCircleButton:hover { background-color: #bbf7d0; }
+.addTextButton      { background-color: #f5f3ff; color: #4c1d95; }
+.addTextButton:hover { background-color: #ede9fe; }
+.addLineButton      { background-color: #f1f5f9; color: #0f172a; }
+.addLineButton:hover { background-color: #e2e8f0; }
+.addArrowButton     { background-color: #fff7ed; color: #7c2d12; }
+.addArrowButton:hover { background-color: #fed7aa; }
+.arrowIcon { transform: rotate(0deg); }
+
+/* Action buttons */
+.duplicateButton { background-color: #eff6ff; color: #1d4ed8; }
+.duplicateButton:hover { background-color: #dbeafe; }
+.deleteButton    { background-color: #fee2e2; color: #991b1b; }
+.deleteButton:hover { background-color: #fecaca; }
+.resetButton     { background-color: #f3f4f6; color: #374151; }
+.resetButton:hover { background-color: #e5e7eb; }
+
+/* ── Formatting section ─────────────────────────────────────────────────── */
+
+.formatSection {
+  padding: 4px 0;
 }
 
-.addStickyButton:hover {
-  background-color: #fde68a;
+.formatLabel {
+  display: block;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-bottom: 5px;
 }
 
-.addRectangleButton {
-  background-color: #dbeafe;
-  color: #1e3a8a;
+/* Color palette grid */
+.colorGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
 }
 
-.addRectangleButton:hover {
-  background-color: #bfdbfe;
+.colorSwatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s;
 }
 
-.addCircleButton {
-  background-color: #dcfce7;
-  color: #14532d;
+.colorSwatch:hover {
+  transform: scale(1.15);
 }
 
-.addCircleButton:hover {
-  background-color: #bbf7d0;
-}
-
-.addTextButton {
-  background-color: #f5f3ff;
-  color: #4c1d95;
-}
-
-.addTextButton:hover {
-  background-color: #ede9fe;
-}
-
-.addLineButton {
-  background-color: #f1f5f9;
-  color: #0f172a;
-}
-
-.addLineButton:hover {
-  background-color: #e2e8f0;
-}
-
-.addArrowButton {
-  background-color: #fff7ed;
-  color: #7c2d12;
-}
-
-.addArrowButton:hover {
-  background-color: #fed7aa;
-}
-
-.arrowIcon {
-  transform: rotate(0deg);
-}
-
-.deleteButton {
-  background-color: #fee2e2;
-  color: #991b1b;
-}
-
-.deleteButton:hover {
-  background-color: #fecaca;
-}
-
-.resetButton {
-  background-color: #f3f4f6;
+.hexInput {
+  width: 100%;
+  margin-top: 4px;
+  padding: 3px 6px;
+  font-size: 0.6875rem;
+  font-family: ui-monospace, monospace;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  box-sizing: border-box;
   color: #374151;
+  outline: none;
 }
 
-.resetButton:hover {
-  background-color: #e5e7eb;
+.hexInput:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+/* Font size control */
+.fontSizeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fontSizeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 14px;
+  color: #374151;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+}
+
+.fontSizeBtn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+
+.fontSizeValue {
+  flex: 1;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #1e293b;
+  min-width: 20px;
+}
+
+/* ── Help button ─────────────────────────────────────────────────────────── */
+
+.helpButton {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.95);
+  color: #64748b;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: color 0.15s, box-shadow 0.15s;
+}
+
+.helpButton:hover {
+  color: #1e293b;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }

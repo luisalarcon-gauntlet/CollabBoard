@@ -15,17 +15,30 @@ interface TextElementProps {
   id: string;
   layer: TextLayer;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
+  onDragStart: () => void;
+  onDragDelta: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
   screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   getScreenPos: (e: { clientX: number; clientY: number }) => { sx: number; sy: number } | null;
 }
 
-function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScreenPos }: TextElementProps) {
+function TextElementInner({
+  id,
+  layer,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragDelta,
+  onDragEnd,
+  screenToWorld,
+  getScreenPos,
+}: TextElementProps) {
   const { x, y, width, height, text, fontSize, fontWeight, color } = layer;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(text);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const dragStartRef = useRef<{ offsetWx: number; offsetWy: number } | null>(null);
+  const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
   const resizeStartRef = useRef<{
     handle: ResizeHandle;
     startX: number;
@@ -36,23 +49,12 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
     startPosY: number;
   } | null>(null);
 
-  // Auto-resize textarea to fit content while editing
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta || !isEditing) return;
     ta.style.height = "auto";
     ta.style.height = `${ta.scrollHeight}px`;
   }, [editValue, isEditing]);
-
-  const updatePos = useCallback(
-    (wx: number, wy: number) => {
-      const current = sharedLayers.get(id) as TextLayer | undefined;
-      if (current?.type === "text") {
-        sharedLayers.set(id, { ...current, x: wx, y: wy });
-      }
-    },
-    [id]
-  );
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
@@ -108,19 +110,17 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
     (e: React.PointerEvent) => {
       if (isEditing) return;
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        dragStartRef.current = {
-          offsetWx: layer.x - world.x,
-          offsetWy: layer.y - world.y,
-        };
+        dragStartRef.current = { startWorldX: world.x, startWorldY: world.y };
+        onDragStart();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [isEditing, layer.x, layer.y, onSelect, getScreenPos, screenToWorld]
+    [isEditing, onSelect, onDragStart, getScreenPos, screenToWorld]
   );
 
   const handlePointerMove = useCallback(
@@ -131,24 +131,31 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        updatePos(world.x + dragStartRef.current.offsetWx, world.y + dragStartRef.current.offsetWy);
+        onDragDelta(
+          world.x - dragStartRef.current.startWorldX,
+          world.y - dragStartRef.current.startWorldY
+        );
       }
     },
-    [updatePos, handleResizePointerMove, screenToWorld, getScreenPos]
+    [handleResizePointerMove, onDragDelta, screenToWorld, getScreenPos]
   );
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      dragStartRef.current = null;
-      resizeStartRef.current = null;
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 0) {
+        dragStartRef.current = null;
+        resizeStartRef.current = null;
+        onDragEnd();
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    },
+    [onDragEnd]
+  );
 
   const handleResizePointerDown = useCallback(
     (e: React.PointerEvent, handle: ResizeHandle) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
@@ -182,7 +189,6 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
     const current = sharedLayers.get(id) as TextLayer | undefined;
     if (!current || current.type !== "text") return;
     const trimmed = editValue.trim() || "Text";
-    // Also capture textarea height to persist the auto-resized height
     const newHeight = textareaRef.current
       ? Math.max(MIN_HEIGHT, textareaRef.current.scrollHeight)
       : current.height;
@@ -196,7 +202,6 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
         setEditValue(text);
         setIsEditing(false);
       }
-      // Allow Enter for newlines; Ctrl/Cmd+Enter to commit
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         commitText();
@@ -205,11 +210,7 @@ function TextElementInner({ id, layer, selected, onSelect, screenToWorld, getScr
     [commitText, text]
   );
 
-  const fontStyle: React.CSSProperties = {
-    fontSize,
-    fontWeight,
-    color,
-  };
+  const fontStyle: React.CSSProperties = { fontSize, fontWeight, color };
 
   return (
     <div

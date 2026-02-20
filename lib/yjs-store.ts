@@ -15,6 +15,8 @@ export type StickyLayer = {
   width?: number;
   height?: number;
   text: string;
+  fontSize?: number;  // font size for the note text (default: 14)
+  bgColor?: string;   // background color (default: #fffbeb)
 };
 
 export type RectangleLayer = {

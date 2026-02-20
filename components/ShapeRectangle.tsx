@@ -15,25 +15,36 @@ interface ShapeRectangleProps {
   id: string;
   layer: RectangleLayer;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (shiftKey: boolean) => void;
+  onDragStart: () => void;
+  onDragDelta: (dx: number, dy: number) => void;
+  onDragEnd: () => void;
   screenToWorld: (sx: number, sy: number) => { x: number; y: number };
   getScreenPos: (e: { clientX: number; clientY: number }) => { sx: number; sy: number } | null;
 }
 
-export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, getScreenPos }: ShapeRectangleProps) {
+export function ShapeRectangle({
+  id,
+  layer,
+  selected,
+  onSelect,
+  onDragStart,
+  onDragDelta,
+  onDragEnd,
+  screenToWorld,
+  getScreenPos,
+}: ShapeRectangleProps) {
   const { x, y, width, height, fill = "#93c5fd" } = layer;
-  const dragStartRef = useRef<{ offsetWx: number; offsetWy: number } | null>(null);
-  const resizeStartRef = useRef<{ handle: ResizeHandle; startX: number; startY: number; startWidth: number; startHeight: number; startPosX: number; startPosY: number } | null>(null);
-
-  const updatePos = useCallback(
-    (wx: number, wy: number) => {
-      const current = sharedLayers.get(id) as RectangleLayer | undefined;
-      if (current?.type === "rectangle") {
-        sharedLayers.set(id, { ...current, x: wx, y: wy });
-      }
-    },
-    [id]
-  );
+  const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
+  const resizeStartRef = useRef<{
+    handle: ResizeHandle;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    startPosX: number;
+    startPosY: number;
+  } | null>(null);
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
@@ -51,8 +62,9 @@ export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, g
       const pos = getScreenPos(e);
       if (!pos) return;
       const world = screenToWorld(pos.sx, pos.sy);
-      
-      const { handle, startX, startY, startWidth, startHeight, startPosX, startPosY } = resizeStartRef.current;
+
+      const { handle, startX, startY, startWidth, startHeight, startPosX, startPosY } =
+        resizeStartRef.current;
       const dx = world.x - startX;
       const dy = world.y - startY;
 
@@ -87,19 +99,17 @@ export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, g
   const handlePointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        dragStartRef.current = {
-          offsetWx: layer.x - world.x,
-          offsetWy: layer.y - world.y,
-        };
+        dragStartRef.current = { startWorldX: world.x, startWorldY: world.y };
+        onDragStart();
         (e.target as HTMLElement).setPointerCapture(e.pointerId);
       }
     },
-    [layer.x, layer.y, onSelect, getScreenPos, screenToWorld]
+    [onSelect, onDragStart, getScreenPos, screenToWorld]
   );
 
   const handlePointerMove = useCallback(
@@ -110,24 +120,31 @@ export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, g
         const pos = getScreenPos(e);
         if (!pos) return;
         const world = screenToWorld(pos.sx, pos.sy);
-        updatePos(world.x + dragStartRef.current.offsetWx, world.y + dragStartRef.current.offsetWy);
+        onDragDelta(
+          world.x - dragStartRef.current.startWorldX,
+          world.y - dragStartRef.current.startWorldY
+        );
       }
     },
-    [updatePos, handleResizePointerMove, screenToWorld, getScreenPos]
+    [handleResizePointerMove, onDragDelta, screenToWorld, getScreenPos]
   );
 
-  const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (e.button === 0) {
-      dragStartRef.current = null;
-      resizeStartRef.current = null;
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    }
-  }, []);
+  const handlePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button === 0) {
+        dragStartRef.current = null;
+        resizeStartRef.current = null;
+        onDragEnd();
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      }
+    },
+    [onDragEnd]
+  );
 
   const handleResizePointerDown = useCallback(
     (e: React.PointerEvent, handle: ResizeHandle) => {
       e.stopPropagation();
-      onSelect();
+      onSelect(e.shiftKey);
       if (e.button === 0) {
         const pos = getScreenPos(e);
         if (!pos) return;
@@ -149,17 +166,8 @@ export function ShapeRectangle({ id, layer, selected, onSelect, screenToWorld, g
 
   return (
     <div
-      className={cn(
-        styles.rectangle,
-        selected && styles.rectangleSelected
-      )}
-      style={{
-        left: x,
-        top: y,
-        width,
-        height,
-        backgroundColor: fill,
-      }}
+      className={cn(styles.rectangle, selected && styles.rectangleSelected)}
+      style={{ left: x, top: y, width, height, backgroundColor: fill }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
