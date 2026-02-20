@@ -1,0 +1,80 @@
+/* TextElement Component Styles */
+.textEl {
+  position: absolute;
+  cursor: grab;
+  background: transparent;
+  pointer-events: auto;
+  user-select: none;
+  min-width: 40px;
+  min-height: 24px;
+}
+
+.textEl:active {
+  cursor: grabbing;
+}
+
+.textElSelected {
+  box-shadow: 0 0 0 2px #3b82f6;
+  border-radius: 2px;
+}
+
+.textDisplay {
+  display: block;
+  width: 100%;
+  height: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  padding: 4px;
+  box-sizing: border-box;
+}
+
+.textArea {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1.5px solid #3b82f6;
+  border-radius: 2px;
+  outline: none;
+  resize: none;
+  padding: 4px;
+  box-sizing: border-box;
+  font-family: inherit;
+  overflow: hidden;
+  cursor: text;
+}
+
+.resizeHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background-color: white;
+  border: 2px solid #3b82f6;
+  border-radius: 50%;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.handleNW {
+  top: -6px;
+  left: -6px;
+  cursor: nw-resize;
+}
+
+.handleNE {
+  top: -6px;
+  right: -6px;
+  cursor: ne-resize;
+}
+
+.handleSW {
+  bottom: -6px;
+  left: -6px;
+  cursor: sw-resize;
+}
+
+.handleSE {
+  bottom: -6px;
+  right: -6px;
+  cursor: se-resize;
+}

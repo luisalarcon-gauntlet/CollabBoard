@@ -85,6 +85,46 @@
   background-color: #bfdbfe;
 }
 
+.addCircleButton {
+  background-color: #dcfce7;
+  color: #14532d;
+}
+
+.addCircleButton:hover {
+  background-color: #bbf7d0;
+}
+
+.addTextButton {
+  background-color: #f5f3ff;
+  color: #4c1d95;
+}
+
+.addTextButton:hover {
+  background-color: #ede9fe;
+}
+
+.addLineButton {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+.addLineButton:hover {
+  background-color: #e2e8f0;
+}
+
+.addArrowButton {
+  background-color: #fff7ed;
+  color: #7c2d12;
+}
+
+.addArrowButton:hover {
+  background-color: #fed7aa;
+}
+
+.arrowIcon {
+  transform: rotate(0deg);
+}
+
 .deleteButton {
   background-color: #fee2e2;
   color: #991b1b;

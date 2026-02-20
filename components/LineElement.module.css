@@ -1,0 +1,42 @@
+/* LineElement Component Styles */
+.svgWrapper {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.hitStroke {
+  fill: none;
+  stroke: transparent;
+  cursor: grab;
+  pointer-events: stroke;
+}
+
+.hitStroke:active {
+  cursor: grabbing;
+}
+
+.lineStroke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.selectionStroke {
+  fill: none;
+  stroke: #3b82f6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.arrowHead {
+  pointer-events: none;
+}
+
+.endpointHandle {
+  cursor: crosshair;
+  pointer-events: all;
+}

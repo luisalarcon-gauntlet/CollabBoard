@@ -26,7 +26,41 @@ export type RectangleLayer = {
   fill?: string;
 };
 
-export type LayerData = StickyLayer | RectangleLayer;
+export type CircleLayer = {
+  type: "circle";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fill?: string;
+};
+
+export type TextLayer = {
+  type: "text";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontSize: number;
+  fontWeight: string;
+  color: string;
+};
+
+/** Points are stored as absolute world-space coordinates [wx, wy][].
+ *  x, y mirror the bounding-box top-left so consumers can position the SVG
+ *  without iterating points on every render. */
+export type LineLayer = {
+  type: "line";
+  x: number;
+  y: number;
+  points: [number, number][];
+  color: string;
+  thickness: number;
+  variant: "straight" | "arrow";
+};
+
+export type LayerData = StickyLayer | RectangleLayer | CircleLayer | TextLayer | LineLayer;
 
 /** The shared Y.Map that stores all whiteboard layers. */
 export const sharedLayers = ydoc.getMap<LayerData>("layers");

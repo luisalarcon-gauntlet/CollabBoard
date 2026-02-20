@@ -4,18 +4,33 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
 import { sharedLayers, getAwareness, ensurePersistence } from "@/lib/yjs-store";
-import type { RectangleLayer, StickyLayer } from "@/lib/yjs-store";
+import type { RectangleLayer, StickyLayer, CircleLayer, TextLayer, LineLayer } from "@/lib/yjs-store";
 import { BoardTransformProvider, useBoardTransform } from "@/lib/board-transform";
 import { Avatars } from "./Avatars";
 import { CursorPresence } from "./CursorPresence";
 import { StickyNote } from "./StickyNote";
 import { ShapeRectangle } from "./ShapeRectangle";
-import { StickyNote as StickyIcon, Square, Trash2, Home } from "lucide-react";
+import { ShapeCircle } from "./ShapeCircle";
+import { TextElement } from "./TextElement";
+import { LineElement } from "./LineElement";
+import {
+  StickyNote as StickyIcon,
+  Square,
+  Circle,
+  Type,
+  MoveUpRight,
+  Trash2,
+  Home,
+} from "lucide-react";
 import styles from "./Whiteboard.module.css";
 
 const DEFAULT_RECT_SIZE = 120;
 const DEFAULT_STICKY_WIDTH = 200;
 const DEFAULT_STICKY_HEIGHT = 150;
+const DEFAULT_CIRCLE_SIZE = 120;
+const DEFAULT_TEXT_WIDTH = 200;
+const DEFAULT_TEXT_HEIGHT = 40;
+const DEFAULT_LINE_LENGTH = 160;
 
 function WhiteboardInner() {
   const layers = useYjsStore();
@@ -67,7 +82,9 @@ function WhiteboardInner() {
       if (!containerRef.current || !awareness || !pos) return;
       const world = screenToWorld(pos.sx, pos.sy);
       const cursor = { x: Math.round(world.x), y: Math.round(world.y) };
-      const prev = awareness.getLocalState()?.user as { name?: string; avatar?: string; cursor?: { x: number; y: number } | null } | undefined;
+      const prev = awareness.getLocalState()?.user as
+        | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
+        | undefined;
       awareness.setLocalStateField("user", { ...prev, cursor });
     },
     [getScreenPos, screenToWorld, containerRef]
@@ -76,7 +93,9 @@ function WhiteboardInner() {
   const handlePointerLeave = useCallback(() => {
     const awareness = getAwareness();
     if (!awareness) return;
-    const prev = awareness.getLocalState()?.user as { name?: string; avatar?: string; cursor?: { x: number; y: number } | null } | undefined;
+    const prev = awareness.getLocalState()?.user as
+      | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
+      | undefined;
     awareness.setLocalStateField("user", { ...prev, cursor: null });
   }, []);
 
@@ -137,12 +156,10 @@ function WhiteboardInner() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Delete" || e.key === "Backspace") {
-        // Don't delete if user is editing text in an input/textarea
         const target = e.target as HTMLElement;
         if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
           return;
         }
-        
         if (selectedId) {
           e.preventDefault();
           sharedLayers.delete(selectedId);
@@ -154,36 +171,101 @@ function WhiteboardInner() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedId]);
 
+  // ── Layer creation helpers ────────────────────────────────────────────────
+
+  /** Returns the world-space center of the viewport so new items appear in view. */
+  const viewportCenter = useCallback((): { x: number; y: number } => {
+    const el = containerRef.current;
+    if (!el) return { x: 150, y: 150 };
+    const { width, height } = el.getBoundingClientRect();
+    return screenToWorld(width / 2, height / 2);
+  }, [containerRef, screenToWorld]);
+
   const addSticky = useCallback(() => {
+    const { x, y } = viewportCenter();
     const id = `sticky-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     sharedLayers.set(id, {
       type: "sticky",
-      x: 100,
-      y: 100,
+      x: x - DEFAULT_STICKY_WIDTH / 2,
+      y: y - DEFAULT_STICKY_HEIGHT / 2,
       width: DEFAULT_STICKY_WIDTH,
       height: DEFAULT_STICKY_HEIGHT,
       text: "New note",
     });
     setSelectedId(id);
-  }, []);
+  }, [viewportCenter]);
 
   const addRectangle = useCallback(() => {
+    const { x, y } = viewportCenter();
     const id = `rect-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     sharedLayers.set(id, {
       type: "rectangle",
-      x: 150,
-      y: 150,
+      x: x - DEFAULT_RECT_SIZE / 2,
+      y: y - DEFAULT_RECT_SIZE / 2,
       width: DEFAULT_RECT_SIZE,
       height: DEFAULT_RECT_SIZE,
       fill: "#93c5fd",
     });
     setSelectedId(id);
-  }, []);
+  }, [viewportCenter]);
+
+  const addCircle = useCallback(() => {
+    const { x, y } = viewportCenter();
+    const id = `circle-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    sharedLayers.set(id, {
+      type: "circle",
+      x: x - DEFAULT_CIRCLE_SIZE / 2,
+      y: y - DEFAULT_CIRCLE_SIZE / 2,
+      width: DEFAULT_CIRCLE_SIZE,
+      height: DEFAULT_CIRCLE_SIZE,
+      fill: "#86efac",
+    });
+    setSelectedId(id);
+  }, [viewportCenter]);
+
+  const addText = useCallback(() => {
+    const { x, y } = viewportCenter();
+    const id = `text-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    sharedLayers.set(id, {
+      type: "text",
+      x: x - DEFAULT_TEXT_WIDTH / 2,
+      y: y - DEFAULT_TEXT_HEIGHT / 2,
+      width: DEFAULT_TEXT_WIDTH,
+      height: DEFAULT_TEXT_HEIGHT,
+      text: "Text",
+      fontSize: 16,
+      fontWeight: "normal",
+      color: "#1e293b",
+    });
+    setSelectedId(id);
+  }, [viewportCenter]);
+
+  const addLine = useCallback(
+    (lineVariant: "straight" | "arrow") => {
+      const { x, y } = viewportCenter();
+      const id = `line-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const x1 = x - DEFAULT_LINE_LENGTH / 2;
+      const x2 = x + DEFAULT_LINE_LENGTH / 2;
+      sharedLayers.set(id, {
+        type: "line",
+        x: x1,
+        y,
+        points: [
+          [x1, y],
+          [x2, y],
+        ],
+        color: "#1e293b",
+        thickness: 2,
+        variant: lineVariant,
+      });
+      setSelectedId(id);
+    },
+    [viewportCenter]
+  );
 
   const resetView = useCallback(() => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    // Center on (100, 100) with zoom 1.0
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
     setPan({
@@ -204,7 +286,7 @@ function WhiteboardInner() {
       onPointerLeave={handlePointerLeave}
       onWheel={handleWheel}
     >
-      {/* Pan handle layer - covers viewport for infinite panning */}
+      {/* Pan handle layer */}
       <div
         data-pan-handle
         className={`${styles.panHandle} ${panStartRef.current ? styles.panHandleGrabbing : styles.panHandleGrab}`}
@@ -214,7 +296,7 @@ function WhiteboardInner() {
         onPointerLeave={handleBoardPointerUp}
       />
 
-      {/* Infinite board: transformed world */}
+      {/* Infinite world: transformed */}
       <div
         className={styles.worldTransform}
         style={{
@@ -223,6 +305,7 @@ function WhiteboardInner() {
       >
         {layerEntries.map(([id, layer]) => {
           if (!layer) return null;
+
           if (layer.type === "sticky") {
             return (
               <StickyNote
@@ -236,6 +319,7 @@ function WhiteboardInner() {
               />
             );
           }
+
           if (layer.type === "rectangle") {
             return (
               <ShapeRectangle
@@ -249,6 +333,49 @@ function WhiteboardInner() {
               />
             );
           }
+
+          if (layer.type === "circle") {
+            return (
+              <ShapeCircle
+                key={id}
+                id={id}
+                layer={layer as CircleLayer}
+                selected={selectedId === id}
+                onSelect={() => setSelectedId(id)}
+                screenToWorld={screenToWorld}
+                getScreenPos={getScreenPos}
+              />
+            );
+          }
+
+          if (layer.type === "text") {
+            return (
+              <TextElement
+                key={id}
+                id={id}
+                layer={layer as TextLayer}
+                selected={selectedId === id}
+                onSelect={() => setSelectedId(id)}
+                screenToWorld={screenToWorld}
+                getScreenPos={getScreenPos}
+              />
+            );
+          }
+
+          if (layer.type === "line") {
+            return (
+              <LineElement
+                key={id}
+                id={id}
+                layer={layer as LineLayer}
+                selected={selectedId === id}
+                onSelect={() => setSelectedId(id)}
+                screenToWorld={screenToWorld}
+                getScreenPos={getScreenPos}
+              />
+            );
+          }
+
           return null;
         })}
       </div>
@@ -267,6 +394,7 @@ function WhiteboardInner() {
           <StickyIcon size={20} />
           <span className={styles.buttonLabel}>Sticky</span>
         </button>
+
         <button
           type="button"
           onClick={addRectangle}
@@ -276,6 +404,47 @@ function WhiteboardInner() {
           <Square size={20} />
           <span className={styles.buttonLabel}>Rectangle</span>
         </button>
+
+        <button
+          type="button"
+          onClick={addCircle}
+          className={`${styles.toolbarButton} ${styles.addCircleButton}`}
+          title="Add Circle"
+        >
+          <Circle size={20} />
+          <span className={styles.buttonLabel}>Circle</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={addText}
+          className={`${styles.toolbarButton} ${styles.addTextButton}`}
+          title="Add Text"
+        >
+          <Type size={20} />
+          <span className={styles.buttonLabel}>Text</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => addLine("straight")}
+          className={`${styles.toolbarButton} ${styles.addLineButton}`}
+          title="Add Line"
+        >
+          <MoveUpRight size={20} />
+          <span className={styles.buttonLabel}>Line</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => addLine("arrow")}
+          className={`${styles.toolbarButton} ${styles.addArrowButton}`}
+          title="Add Arrow"
+        >
+          <MoveUpRight size={20} className={styles.arrowIcon} />
+          <span className={styles.buttonLabel}>Arrow</span>
+        </button>
+
         {selectedId && (
           <button
             type="button"
@@ -290,6 +459,7 @@ function WhiteboardInner() {
             <span className={styles.buttonLabel}>Delete</span>
           </button>
         )}
+
         <button
           type="button"
           onClick={resetView}
