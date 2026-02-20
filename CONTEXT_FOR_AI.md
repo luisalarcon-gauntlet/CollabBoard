@@ -2,7 +2,7 @@
 
 > This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
 >
-> **Last updated:** Feb 2026 — reflects Frames feature and connector-to-frame support.
+> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, and the full AI Board Agent feature.
 
 ---
 
@@ -28,6 +28,7 @@ The core goal is bulletproof multiplayer sync without any third-party sync servi
 | Icons | **lucide-react** | Icon library |
 | Type Safety | **TypeScript 5** (strict mode) | End-to-end types |
 | Component Primitives | **shadcn/ui** (New York style) | Accessible component library, not heavily used yet |
+| AI SDK | **@anthropic-ai/sdk** (`^0.78.0`) | Claude tool-calling for the AI Board Agent |
 
 **Key design decision:** There is NO third-party collaboration backend. Everything runs on Supabase infrastructure. The Yjs provider is custom-built (`lib/supabase-yjs-provider.ts`).
 
@@ -42,9 +43,12 @@ CollabBoard/
 │   ├── page.tsx                  # Landing page — auth gate, redirects to /board if signed in
 │   ├── globals.css               # Global CSS variables and resets
 │   ├── page.module.css
-│   └── board/
-│       ├── page.tsx              # Main board page — renders <Whiteboard />, Sign Out button
-│       └── page.module.css
+│   ├── board/
+│   │   ├── page.tsx              # Main board page — renders <Whiteboard />, <AIChat />, Sign Out button
+│   │   └── page.module.css
+│   └── api/
+│       └── ai/
+│           └── route.ts          # ★ AI Agent API — model routing, prompt caching, 6-tool schema
 │
 ├── components/
 │   ├── Whiteboard.tsx            # ★ Core component — canvas, toolbar, pan/zoom, layer rendering
@@ -62,7 +66,9 @@ CollabBoard/
 │   ├── LineElement.tsx           # Line/arrow — endpoint drag, multi-point, stroke color
 │   ├── HelpModal.tsx             # Keyboard shortcut reference modal (? key)
 │   ├── Avatars.tsx               # Shows avatars/initials of connected users (top-left)
-│   └── CursorPresence.tsx        # Renders remote user cursors with name labels
+│   ├── CursorPresence.tsx        # Renders remote user cursors with name labels
+│   ├── AIChat.tsx                # ★ Floating AI Board Agent chat panel (FAB + collapsible)
+│   └── AIChat.module.css
 │
 ├── lib/
 │   ├── supabase.ts               # Supabase client singleton
@@ -71,7 +77,8 @@ CollabBoard/
 │   ├── useYjsStore.ts            # React hook — subscribes to Yjs layers map
 │   ├── useAwareness.ts           # React hook — returns remote users + cursor positions
 │   ├── board-transform.tsx       # React context for pan/zoom, tool mode, coordinate conversion
-│   └── utils.ts                  # cn() class-name helper + getElementsInFrame() geometry utility
+│   ├── utils.ts                  # cn() class-name helper + getElementsInFrame() geometry utility
+│   └── ai-executor.ts            # ★ Executes AI tool calls atomically on the Yjs doc
 │
 ├── supabase/
 │   └── schema.sql                # DB schema: yjs_updates table, RLS policies, Realtime pub
@@ -371,6 +378,106 @@ ALTER PUBLICATION supabase_realtime ADD TABLE yjs_updates;
 
 **Note:** `content` is `TEXT` (base64), not `BYTEA`. Current room ID is hardcoded as `"collab-board-main"` in `lib/yjs-store.ts`.
 
+### 4.10 AI Board Agent
+
+A fully-integrated AI assistant that can create, update, arrange, and delete board content in real-time via natural language. Changes are applied atomically to the shared Yjs document, so every peer sees them instantly.
+
+#### Files
+
+| File | Role |
+|---|---|
+| `app/api/ai/route.ts` | Next.js POST route — classifies the request, selects a model, calls Anthropic, returns tool calls |
+| `lib/ai-executor.ts` | Pure client-side executor — applies tool calls to `sharedLayers` inside a `ydoc.transact` |
+| `components/AIChat.tsx` | Floating chat UI — FAB, collapsible panel, message history, tier badge, status phases |
+| `components/AIChat.module.css` | Styles for the chat panel |
+
+#### Tool Schema (6 tools)
+
+| Tool | Purpose | Key inputs |
+|---|---|---|
+| `create_layer` | Create exactly 1 layer | `type`, `x`, `y`, optional `width`, `height`, `text`, `fill`, `title` |
+| `create_bulk_layers` | Create 2+ layers atomically (preferred) | `layers[]` — array of layer defs |
+| `update_layers` | Change color, position, size, or text on existing layers | `ids[]`, `properties` |
+| `delete_layers` | Remove layers by ID | `ids[]` |
+| `arrange_grid` | Reposition layers into a uniform grid — executor computes coords | `ids[]`, `columns`, `spacing`, `origin_x`, `origin_y` |
+| `resize_frame_to_fit` | Expand/shrink a Frame to wrap children with padding | `frame_id`, `child_ids[]`, `padding` |
+
+All colors are CSS hex strings (e.g. `"#fbbf24"`). The AI is instructed to omit default properties (`rotation: 0`, `opacity: 1`, `fontSize: 16`, etc.) to minimise output tokens.
+
+#### Model Routing
+
+Every request selects a model based on the last user message:
+
+```typescript
+// Routing regex in app/api/ai/route.ts
+const REASONING_PATTERNS =
+  /\b(swot|retrospective|retro|sprint|user.?journey|kanban|roadmap|matrix|framework|template|analysis|diagram|workflow)\b/i;
+
+// Fast route  → claude-3-5-haiku-latest   (5× faster, 10× cheaper)
+// Reasoning   → claude-3-5-sonnet-latest  (complex spatial / template planning)
+```
+
+The selected tier (`"fast"` | `"reasoning"`) is returned to the client and displayed as a small badge on each assistant message.
+
+#### Prompt Caching
+
+The system uses Anthropic's ephemeral prompt caching to cut TTFT by ~800 ms on repeated requests:
+
+- **Block 1** — static `SYSTEM_PROMPT` (instructions, rules, blueprints): `cache_control: { type: "ephemeral" }`. Cached for ~5 min; re-tokenised only on cache miss.
+- **Block 2** — dynamic board state (`CURRENT BOARD STATE: ...`): no cache (changes every request).
+- **Last tool** (`resize_frame_to_fit`) — `cache_control: { type: "ephemeral" }`. Caches the entire tool block as one unit (Anthropic's requirement: cache break point on the final item).
+
+#### Blueprint Prompts
+
+The system prompt includes exact pixel-level specifications so Claude emits correct coordinates on the first attempt:
+
+- **SWOT Analysis** — 860×860 Frame + 4 colored 400×400 rectangle quadrants + 4 bold text labels (9 objects total via `create_bulk_layers`)
+- **Retrospective** — 3 Frames (400×600, 40 px apart): "What Went Well" / "What Didn't" / "Action Items"
+- **User Journey** — 5 Frames (280×400, 40 px apart) with stage text labels
+
+#### `lib/ai-executor.ts` — Executor Architecture
+
+```typescript
+export function executeAiTools(
+  toolCalls: AiToolCall[],
+  sharedLayers: Y.Map<LayerData>,
+  ydoc: Y.Doc,
+): void {
+  ydoc.transact(() => {          // ← single atomic Yjs transaction
+    for (const call of toolCalls) {
+      try {
+        // hot path first
+        switch (call.name) {
+          case "create_bulk_layers": ...   // build all layers, then write in one pass
+          case "create_layer":       ...
+          case "update_layers":      ...
+          case "delete_layers":      ...
+          case "arrange_grid":       ...   // computes grid coords from max item dimensions
+          case "resize_frame_to_fit": ...  // union-bbox children → set frame x/y/w/h
+        }
+      } catch (err) {
+        console.error(...);  // one bad call never aborts the whole transaction
+      }
+    }
+  });
+}
+```
+
+Key details:
+- `create_bulk_layers` separates the CPU phase (build all `LayerData` objects) from the I/O phase (all `sharedLayers.set` calls) for maximum locality.
+- `arrange_grid` uses `max(all widths)` / `max(all heights)` as the uniform cell size so mixed-size items never collide.
+- `resize_frame_to_fit` computes the union bounding box of all children and repositions + resizes the frame with configurable padding (default 40 px).
+- Missing IDs are skipped with a `console.warn` — the transaction still commits.
+- `normaliseColor()` accepts both CSS hex strings and legacy numeric colors from the AI.
+
+#### `components/AIChat.tsx` — UI Architecture
+
+- **Floating FAB** fixed to `bottom: 4.5rem; right: 1rem` (above the help button at `1rem`). Uses `pointer-events: none` on the wrapper and `pointer-events: all` only on the FAB/panel, so the canvas underneath remains fully interactive.
+- **Two message arrays** are maintained: `displayMessages` (drives the UI) and `apiMessages` (Anthropic-format history for multi-turn context). After a tool-use turn, the assistant slot is filled with a plain-text summary so subsequent turns have valid history without needing `tool_result` blocks.
+- **Phased loading status**: `"AI is working…"` shown immediately on submit; escalates to `"Still generating…"` after 4 s via `slowTimerRef` (honest feedback without fake streaming).
+- **Immediate execution**: `executeAiTools` is called synchronously the moment `res.json()` resolves — zero extra delay.
+- **Model tier badge**: each assistant bubble shows a small inline `haiku` (green) or `sonnet` (purple) badge.
+
 ---
 
 ## 5. Component Reference
@@ -529,6 +636,7 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | `CLERK_SECRET_KEY` | Clerk secret key (server-side only) |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
+| `ANTHROPIC_API_KEY` | Anthropic API key — server-side only, required for the AI Board Agent |
 
 ---
 
@@ -572,6 +680,12 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | Zoom locked during help modal | ✅ | `showHelpRef` checked in wheel handler |
 | Reset view | ✅ | Toolbar button resets pan + zoom |
 | Deployment guide | ✅ | Vercel + Supabase documented in DEPLOY.md |
+| **AI Board Agent — chat UI** | ✅ | Floating FAB + collapsible panel, multi-turn history, tier badge, phased status |
+| **AI Board Agent — model routing** | ✅ | Haiku for simple commands; Sonnet for templates (SWOT, Retro, Journey) |
+| **AI Board Agent — prompt caching** | ✅ | System prompt + tool block cached ephemerally; ~800 ms TTFT reduction |
+| **AI Board Agent — 6 tools** | ✅ | create_layer, create_bulk_layers, update_layers, delete_layers, arrange_grid, resize_frame_to_fit |
+| **AI Board Agent — atomic execution** | ✅ | All tool calls applied in a single `ydoc.transact` — one broadcast to all peers |
+| **AI Board Agent — blueprint prompts** | ✅ | SWOT Analysis, Retrospective, User Journey with exact pixel coordinates |
 
 ---
 
@@ -644,8 +758,11 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 **16. Cursor Awareness Throttling**
 - Awareness broadcasts on every `pointermove` — should throttle to ~30 fps
 
-**17. AI Integration**
-- Not implemented. Possible features: sticky note summarization, auto-layout, content generation via Claude 3.5 Sonnet tool-calling
+**17. AI Agent — follow-on improvements**
+- Streaming responses (currently non-streaming, waits for full response)
+- Connector creation via AI (the `ConnectorLayer` type is not yet exposed as an AI tool)
+- Undo for AI-driven changes (Yjs `UndoManager` would treat the whole transaction as one step — ideal)
+- Board-context summarisation ("what's on my board?") using a text-response path alongside tool calls
 
 ---
 
@@ -669,6 +786,7 @@ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+ANTHROPIC_API_KEY=sk-ant-api03-...
 
 # Apply schema in Supabase SQL Editor (supabase/schema.sql)
 
@@ -693,17 +811,19 @@ CollabBoard is a **production-quality, self-hosted collaborative whiteboard** bu
 
 **Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
 
+**The AI Board Agent** is fully implemented: a floating chat UI backed by `app/api/ai/route.ts` that routes simple commands to Claude Haiku and complex templates (SWOT, Retrospective, User Journey) to Claude Sonnet. The system prompt and tool schema are ephemerally cached to cut TTFT. Six tools cover creation, bulk creation, updates, deletion, grid arrangement, and frame auto-sizing. All changes are applied atomically via `lib/ai-executor.ts` inside a single `ydoc.transact`, broadcasting to all peers instantly.
+
 **Most impactful next features** in priority order:
 
-1. **Undo/Redo** — `Y.UndoManager` already supported by Yjs; just needs wiring
+1. **Undo/Redo** — `Y.UndoManager` already supported by Yjs; just needs wiring (AI transactions would be one undo step)
 2. **Multiple boards** — URL-based routing, board listing UI
 3. **Layer z-ordering** — bring to front / send to back within each visual group
 4. **Freehand drawing** — pencil tool
 5. **Editable connector labels** — inline editing for `ConnectorLayer.label`
-6. **Rich text in sticky notes** — `Y.Text` + y-prosemirror
-7. **Per-user cursor colors**
-8. **Image upload** via Supabase Storage
-9. **Export to PNG/SVG**
-10. **AI integration** — Claude 3.5 Sonnet for summarization, layout, content generation
+6. **AI streaming** — stream tool calls for perceived instant feedback on large templates
+7. **Rich text in sticky notes** — `Y.Text` + y-prosemirror
+8. **Per-user cursor colors**
+9. **Image upload** via Supabase Storage
+10. **Export to PNG/SVG**
 
-The codebase is ~22 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.
+The codebase is ~28 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.

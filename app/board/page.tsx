@@ -1,4 +1,5 @@
 import { Whiteboard } from "@/components/Whiteboard";
+import { AIChat } from "@/components/AIChat";
 import { SignOutButton } from "@clerk/nextjs";
 import { LogOut } from "lucide-react";
 import styles from "./page.module.css";
@@ -18,6 +19,9 @@ export default function BoardPage() {
 
       {/* Whiteboard */}
       <Whiteboard />
+
+      {/* AI Board Agent — fixed overlay, canvas events pass through */}
+      <AIChat />
     </div>
   );
 }
