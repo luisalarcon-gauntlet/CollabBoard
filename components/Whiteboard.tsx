@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { throttleTrailing } from "@/lib/throttle";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
 import { sharedLayers, getAwareness, ensurePersistence, ydoc, setConnectionStatusCallback } from "@/lib/yjs-store";
@@ -284,6 +285,10 @@ function WhiteboardInner() {
   // Pan
   const panStartRef = useRef<{ x: number; y: number; startPanX: number; startPanY: number } | null>(null);
 
+  // Throttled awareness cursor updater — created once so the timer state
+  // survives React re-renders (same pattern as transformRef / dragStartPositions).
+  const cursorThrottleRef = useRef<ReturnType<typeof throttleTrailing<(x: number, y: number) => void>> | null>(null);
+
   // Drag (batch movement)
   const dragStartPositions = useRef<
     Map<string, { x: number; y: number; points?: [number, number][] }>
@@ -379,6 +384,22 @@ function WhiteboardInner() {
   // ── Effects ─────────────────────────────────────────────────────────────
 
   useEffect(() => { ensurePersistence(); }, []);
+
+  // Create the awareness-cursor throttle exactly once per mount.
+  // Reading awareness inside the callback (rather than capturing it here)
+  // ensures we always use the live instance even if it changes.
+  useEffect(() => {
+    const throttled = throttleTrailing((x: number, y: number) => {
+      const awareness = getAwareness();
+      if (!awareness) return;
+      const prev = awareness.getLocalState()?.user as
+        | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
+        | undefined;
+      awareness.setLocalStateField("user", { ...prev, cursor: { x, y } });
+    }, 33);
+    cursorThrottleRef.current = throttled;
+    return () => throttled.cancel();
+  }, []);
 
   useEffect(() => {
     const awareness = getAwareness();
@@ -494,20 +515,21 @@ function WhiteboardInner() {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
-      const awareness = getAwareness();
       const pos = getScreenPos(e);
-      if (!containerRef.current || !awareness || !pos) return;
+      if (!containerRef.current || !pos) return;
+      // Coordinate math and guard checks run at full pointer-event rate (60 FPS).
+      // Only the Yjs awareness write is throttled to ~30 FPS (33 ms) so we
+      // don't flood the Supabase Realtime channel while keeping the canvas snappy.
       const world = screenToWorld(pos.sx, pos.sy);
-      const cursor = { x: Math.round(world.x), y: Math.round(world.y) };
-      const prev = awareness.getLocalState()?.user as
-        | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
-        | undefined;
-      awareness.setLocalStateField("user", { ...prev, cursor });
+      cursorThrottleRef.current?.fn(Math.round(world.x), Math.round(world.y));
     },
     [getScreenPos, screenToWorld, containerRef],
   );
 
   const handlePointerLeave = useCallback(() => {
+    // Bypass the throttle entirely: cancel any pending trailing cursor send,
+    // then immediately null out the remote cursor so it disappears at once.
+    cursorThrottleRef.current?.cancel();
     const awareness = getAwareness();
     if (!awareness) return;
     const prev = awareness.getLocalState()?.user as

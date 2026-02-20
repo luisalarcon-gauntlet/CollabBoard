@@ -2,7 +2,7 @@
 
 > This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
 >
-> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, shape rotation, and graceful disconnect/reconnect UI with Vitest test suite.
+> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, shape rotation, graceful disconnect/reconnect UI, and 30 FPS cursor-awareness throttle with Vitest test suite (7 tests).
 
 ---
 
@@ -78,6 +78,7 @@ CollabBoard/
 │   ├── useAwareness.ts           # React hook — returns remote users + cursor positions
 │   ├── board-transform.tsx       # React context for pan/zoom, tool mode, coordinate conversion
 │   ├── utils.ts                  # cn() class-name helper + getElementsInFrame() geometry utility
+│   ├── throttle.ts               # ★ Pure leading+trailing-edge throttle utility (used for cursor awareness)
 │   └── ai-executor.ts            # ★ Executes AI tool calls atomically on the Yjs doc
 │
 ├── supabase/
@@ -244,13 +245,30 @@ Yjs awareness protocol (`y-protocols/awareness`) is used for ephemeral state:
 
 Flow:
 1. On mount, local awareness state is set from Clerk user info
-2. On `pointermove` → cursor world position written to awareness
-3. On `pointerleave` → cursor set to `null`
+2. On `pointermove` → cursor world position written to awareness **at ~30 FPS** (throttled, see below)
+3. On `pointerleave` → cursor set to `null` **immediately** (bypasses throttle)
 4. `useAwareness.ts` hook subscribes to changes, returns remote users array
 5. `CursorPresence.tsx` renders cursor SVG + name label per remote user
 6. `Avatars.tsx` renders avatar images or initials per connected user
 
 Awareness is broadcast on the same Supabase Realtime channel as doc updates (different event type).
+
+**Cursor awareness throttle (`lib/throttle.ts` + `Whiteboard.tsx`):**
+
+Only the Yjs awareness write is throttled — not the full pointer handler. Canvas pan, marquee, and shape dragging still run at the full pointer-event rate (≥ 60 FPS). The throttle operates as follows:
+
+- **Leading edge:** the very first call within a quiet period fires immediately (≤ 1 frame latency on first move).
+- **Trailing edge (33 ms window):** all subsequent calls within the window are suppressed, but the last coordinates are remembered and sent once as a trailing call. This ensures the final resting cursor position always reaches remote peers.
+- **Stale-closure prevention:** a `throttleTrailing()` instance is created once inside a `useEffect` and stored in `cursorThrottleRef` (a `useRef`). The callback reads `getAwareness()` at call time — not at creation time — so it always uses the live provider. React re-renders never recreate or reset the throttle timer.
+- **`pointerleave` bypass:** the leave handler calls `cursorThrottleRef.current.cancel()` first (clearing any pending trailing send), then immediately writes `cursor: null` directly. Remote cursors therefore disappear without delay and no stale position is sent afterwards.
+
+```typescript
+// lib/throttle.ts — public API
+throttleTrailing<T extends (...args: never[]) => void>(fn: T, delay: number)
+  → { fn: T; cancel: () => void }
+```
+
+Four Vitest unit tests cover this behaviour: unthrottled pan callbacks, suppression within the window, trailing-edge final coordinates, and the pointerleave cancel+null path.
 
 ### 4.5 Pan/Zoom & Tool Mode System (`lib/board-transform.tsx`)
 
@@ -707,7 +725,8 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | **Shape rotation** | ✅ | Sticky notes, rectangles, circles — drag rotation handle, CRDT-synced via `ydoc.transact`, CSS `transform: rotate()` |
 | **Rotation — AI support** | ✅ | `rotation` field accepted by `create_layer`, `create_bulk_layers`, `update_layers` in `ai-executor.ts` |
 | **Graceful disconnect/reconnect UI** | ✅ | Non-blocking floating badge (pulsing amber dot + WifiOff icon); driven by `window` online/offline events + Supabase channel status; `lastStatus` replay prevents singleton race condition |
-| **Vitest test suite** | ✅ | 3 tests covering: channel error path, window offline/online events, late-registered callback replay (`npm test`) |
+| **Vitest test suite** | ✅ | 7 tests total: 3 connection-status (channel error, window online/offline, late-callback replay) + 4 cursor-throttle (unthrottled pan, 33 ms suppression, trailing-edge coords, pointerleave cancel) (`npm test`) |
+| **Cursor awareness throttle** | ✅ | `lib/throttle.ts` — leading+trailing 33 ms throttle; only awareness write is throttled; pan/drag remain at 60 FPS; pointerleave bypasses and immediately sends `null`; stale-closure-safe via `useRef` |
 
 ---
 
@@ -779,8 +798,12 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 **15. Mobile / Touch Support**
 - No pinch-to-zoom gesture handling; primarily desktop-oriented
 
-**16. Cursor Awareness Throttling**
-- Awareness broadcasts on every `pointermove` — should throttle to ~30 fps
+**~~16. Cursor Awareness Throttling~~** ✅ **Implemented**
+- `lib/throttle.ts` provides a pure leading+trailing-edge `throttleTrailing()` utility
+- In `Whiteboard.tsx`, only the `awareness.setLocalStateField` call is throttled at 33 ms (~30 FPS); canvas pan, marquee, and shape dragging still run at full pointer-event rate
+- A `useRef` holds the throttle instance (created once in `useEffect`) — no stale closures across React re-renders
+- `pointerleave` calls `cancel()` then immediately writes `cursor: null`, bypassing the throttle entirely
+- 4 Vitest unit tests cover all four behaviours
 
 **17. AI Agent — follow-on improvements**
 - Streaming responses (currently non-streaming, waits for full response)
@@ -838,6 +861,8 @@ CollabBoard is a **production-quality, self-hosted collaborative whiteboard** bu
 **The AI Board Agent** is fully implemented: a floating chat UI backed by `app/api/ai/route.ts` that routes simple commands to Claude Haiku and complex templates (SWOT, Retrospective, User Journey) to Claude Sonnet. The system prompt and tool schema are ephemerally cached to cut TTFT. Six tools cover creation, bulk creation, updates, deletion, grid arrangement, and frame auto-sizing. All changes are applied atomically via `lib/ai-executor.ts` inside a single `ydoc.transact`, broadcasting to all peers instantly.
 
 **Graceful disconnect/reconnect handling** is implemented: a non-blocking floating badge (dark pill with a pulsing amber dot, WifiOff icon, and "Reconnecting…" text) appears whenever the connection drops. The signal comes from both `window` online/offline events (reliable for DevTools Network throttling) and the Supabase Realtime channel subscription status. The provider stores the last known status and replays it to any late-registering React callback, eliminating the singleton/mount-order race condition. A Vitest test suite (`npm test`) covers all three critical paths.
+
+**Cursor awareness throttle** is implemented: only the Yjs `awareness.setLocalStateField` write inside `handlePointerMove` is throttled to 33 ms (~30 FPS) using `lib/throttle.ts` — a pure leading+trailing-edge utility stored in a `useRef` so it survives React re-renders without stale closures. Canvas pan, marquee selection, and shape dragging are completely unaffected. The `pointerleave` handler cancels any pending trailing call and immediately writes `cursor: null`. Four Vitest unit tests verify all four behaviours.
 
 **Most impactful next features** in priority order:
 
