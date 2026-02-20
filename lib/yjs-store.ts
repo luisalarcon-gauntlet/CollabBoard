@@ -17,6 +17,7 @@ export type StickyLayer = {
   text: string;
   fontSize?: number;  // font size for the note text (default: 14)
   bgColor?: string;   // background color (default: #fffbeb)
+  rotation?: number;  // degrees, clockwise (default: 0)
 };
 
 export type RectangleLayer = {
@@ -26,6 +27,7 @@ export type RectangleLayer = {
   width: number;
   height: number;
   fill?: string;
+  rotation?: number;  // degrees, clockwise (default: 0)
 };
 
 export type CircleLayer = {
@@ -35,6 +37,7 @@ export type CircleLayer = {
   width: number;
   height: number;
   fill?: string;
+  rotation?: number;  // degrees, clockwise (default: 0)
 };
 
 export type TextLayer = {

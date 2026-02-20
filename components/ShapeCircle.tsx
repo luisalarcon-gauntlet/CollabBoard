@@ -1,8 +1,9 @@
 "use client";
 
 import { memo, useCallback, useRef } from "react";
+import { RotateCw } from "lucide-react";
 import type { CircleLayer } from "@/lib/yjs-store";
-import { sharedLayers } from "@/lib/yjs-store";
+import { sharedLayers, ydoc } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./ShapeCircle.module.css";
 
@@ -33,8 +34,9 @@ function ShapeCircleInner({
   screenToWorld,
   getScreenPos,
 }: ShapeCircleProps) {
-  const { x, y, width, height, fill = "#86efac" } = layer;
+  const { x, y, width, height, fill = "#86efac", rotation = 0 } = layer;
   const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
+  const rotateStartRef = useRef<{ startAngle: number; startRotation: number } | null>(null);
   const resizeStartRef = useRef<{
     handle: ResizeHandle;
     startX: number;
@@ -182,10 +184,63 @@ function ShapeCircleInner({
     [x, y, width, height, onSelect, getScreenPos, screenToWorld]
   );
 
+  const handleRotatePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (e.button !== 0) return;
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const startAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
+      rotateStartRef.current = { startAngle, startRotation: rotation };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [x, y, width, height, rotation, getScreenPos, screenToWorld]
+  );
+
+  const handleRotatePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!rotateStartRef.current) return;
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const currentAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
+      const newRotation = rotateStartRef.current.startRotation + (currentAngle - rotateStartRef.current.startAngle);
+      ydoc.transact(() => {
+        const current = sharedLayers.get(id) as CircleLayer | undefined;
+        if (current?.type === "circle") {
+          sharedLayers.set(id, { ...current, rotation: newRotation });
+        }
+      });
+    },
+    [id, x, y, width, height, getScreenPos, screenToWorld]
+  );
+
+  const handleRotatePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      rotateStartRef.current = null;
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    },
+    []
+  );
+
   return (
     <div
       className={cn(styles.circle, selected && styles.circleSelected)}
-      style={{ left: x, top: y, width, height, backgroundColor: fill }}
+      style={{
+        left: x,
+        top: y,
+        width,
+        height,
+        backgroundColor: fill,
+        transform: `rotate(${rotation}deg)`,
+        transformOrigin: "center",
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -193,6 +248,17 @@ function ShapeCircleInner({
     >
       {selected && (
         <>
+          <div className={styles.rotationHandleWrapper}>
+            <div
+              className={styles.rotationHandleBtn}
+              onPointerDown={handleRotatePointerDown}
+              onPointerMove={handleRotatePointerMove}
+              onPointerUp={handleRotatePointerUp}
+            >
+              <RotateCw size={10} />
+            </div>
+            <div className={styles.rotationHandleConnector} />
+          </div>
           <div
             className={`${styles.resizeHandle} ${styles.handleNW}`}
             onPointerDown={(e) => handleResizePointerDown(e, "nw")}

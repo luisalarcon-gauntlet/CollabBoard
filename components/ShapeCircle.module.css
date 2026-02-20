@@ -49,3 +49,38 @@
   right: -6px;
   cursor: se-resize;
 }
+
+/* Rotation handle */
+.rotationHandleWrapper {
+  position: absolute;
+  top: -44px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.rotationHandleConnector {
+  width: 2px;
+  height: 24px;
+  background-color: #3b82f6;
+  flex-shrink: 0;
+}
+
+.rotationHandleBtn {
+  width: 20px;
+  height: 20px;
+  background-color: white;
+  border: 2px solid #3b82f6;
+  border-radius: 50%;
+  cursor: crosshair;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #1d4ed8;
+}

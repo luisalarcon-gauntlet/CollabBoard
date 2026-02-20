@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useRef } from "react";
+import { RotateCw } from "lucide-react";
 import type { RectangleLayer } from "@/lib/yjs-store";
-import { sharedLayers } from "@/lib/yjs-store";
+import { sharedLayers, ydoc } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./ShapeRectangle.module.css";
 
@@ -34,8 +35,9 @@ export function ShapeRectangle({
   screenToWorld,
   getScreenPos,
 }: ShapeRectangleProps) {
-  const { x, y, width, height, fill = "#93c5fd" } = layer;
+  const { x, y, width, height, fill = "#93c5fd", rotation = 0 } = layer;
   const dragStartRef = useRef<{ startWorldX: number; startWorldY: number } | null>(null);
+  const rotateStartRef = useRef<{ startAngle: number; startRotation: number } | null>(null);
   const resizeStartRef = useRef<{
     handle: ResizeHandle;
     startX: number;
@@ -164,10 +166,63 @@ export function ShapeRectangle({
     [x, y, width, height, onSelect, getScreenPos, screenToWorld]
   );
 
+  const handleRotatePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (e.button !== 0) return;
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const startAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
+      rotateStartRef.current = { startAngle, startRotation: rotation };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [x, y, width, height, rotation, getScreenPos, screenToWorld]
+  );
+
+  const handleRotatePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!rotateStartRef.current) return;
+      const pos = getScreenPos(e);
+      if (!pos) return;
+      const world = screenToWorld(pos.sx, pos.sy);
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const currentAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
+      const newRotation = rotateStartRef.current.startRotation + (currentAngle - rotateStartRef.current.startAngle);
+      ydoc.transact(() => {
+        const current = sharedLayers.get(id) as RectangleLayer | undefined;
+        if (current?.type === "rectangle") {
+          sharedLayers.set(id, { ...current, rotation: newRotation });
+        }
+      });
+    },
+    [id, x, y, width, height, getScreenPos, screenToWorld]
+  );
+
+  const handleRotatePointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      rotateStartRef.current = null;
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    },
+    []
+  );
+
   return (
     <div
       className={cn(styles.rectangle, selected && styles.rectangleSelected)}
-      style={{ left: x, top: y, width, height, backgroundColor: fill }}
+      style={{
+        left: x,
+        top: y,
+        width,
+        height,
+        backgroundColor: fill,
+        transform: `rotate(${rotation}deg)`,
+        transformOrigin: "center",
+      }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -175,6 +230,17 @@ export function ShapeRectangle({
     >
       {selected && (
         <>
+          <div className={styles.rotationHandleWrapper}>
+            <div
+              className={styles.rotationHandleBtn}
+              onPointerDown={handleRotatePointerDown}
+              onPointerMove={handleRotatePointerMove}
+              onPointerUp={handleRotatePointerUp}
+            >
+              <RotateCw size={10} />
+            </div>
+            <div className={styles.rotationHandleConnector} />
+          </div>
           <div
             className={`${styles.resizeHandle} ${styles.handleNW}`}
             onPointerDown={(e) => handleResizePointerDown(e, "nw")}

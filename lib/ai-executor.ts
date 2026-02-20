@@ -86,35 +86,38 @@ function getLayerBounds(
 
 function buildStickyLayer(input: Record<string, unknown>): StickyLayer {
   return {
-    type:    "sticky",
-    x:       toNumber(input.x, 100),
-    y:       toNumber(input.y, 100),
-    width:   toNumber(input.width,  DEFAULT_STICKY_WIDTH),
-    height:  toNumber(input.height, DEFAULT_STICKY_HEIGHT),
-    text:    typeof input.text === "string" ? input.text : "",
-    bgColor: normaliseColor(input.fill ?? input.bgColor) ?? "#fffbeb",
+    type:     "sticky",
+    x:        toNumber(input.x, 100),
+    y:        toNumber(input.y, 100),
+    width:    toNumber(input.width,  DEFAULT_STICKY_WIDTH),
+    height:   toNumber(input.height, DEFAULT_STICKY_HEIGHT),
+    text:     typeof input.text === "string" ? input.text : "",
+    bgColor:  normaliseColor(input.fill ?? input.bgColor) ?? "#fffbeb",
+    rotation: toNumber(input.rotation, 0),
   };
 }
 
 function buildRectangleLayer(input: Record<string, unknown>): RectangleLayer {
   return {
-    type:   "rectangle",
-    x:      toNumber(input.x, 100),
-    y:      toNumber(input.y, 100),
-    width:  toNumber(input.width,  DEFAULT_RECT_SIZE),
-    height: toNumber(input.height, DEFAULT_RECT_SIZE),
-    fill:   normaliseColor(input.fill),
+    type:     "rectangle",
+    x:        toNumber(input.x, 100),
+    y:        toNumber(input.y, 100),
+    width:    toNumber(input.width,  DEFAULT_RECT_SIZE),
+    height:   toNumber(input.height, DEFAULT_RECT_SIZE),
+    fill:     normaliseColor(input.fill),
+    rotation: toNumber(input.rotation, 0),
   };
 }
 
 function buildCircleLayer(input: Record<string, unknown>): CircleLayer {
   return {
-    type:   "circle",
-    x:      toNumber(input.x, 100),
-    y:      toNumber(input.y, 100),
-    width:  toNumber(input.width,  DEFAULT_CIRCLE_SIZE),
-    height: toNumber(input.height, DEFAULT_CIRCLE_SIZE),
-    fill:   normaliseColor(input.fill),
+    type:     "circle",
+    x:        toNumber(input.x, 100),
+    y:        toNumber(input.y, 100),
+    width:    toNumber(input.width,  DEFAULT_CIRCLE_SIZE),
+    height:   toNumber(input.height, DEFAULT_CIRCLE_SIZE),
+    fill:     normaliseColor(input.fill),
+    rotation: toNumber(input.rotation, 0),
   };
 }
 
@@ -228,6 +231,10 @@ function handleUpdateLayers(
 
     if ("title" in props && updated.type === "frame" && typeof props.title === "string") {
       updated.title = props.title;
+    }
+
+    if ("rotation" in props && (updated.type === "sticky" || updated.type === "rectangle" || updated.type === "circle")) {
+      updated.rotation = toNumber(props.rotation, updated.rotation ?? 0);
     }
 
     sharedLayers.set(id, updated);

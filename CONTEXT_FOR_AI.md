@@ -2,7 +2,7 @@
 
 > This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
 >
-> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, and the full AI Board Agent feature.
+> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, and shape rotation.
 
 ---
 
@@ -125,25 +125,28 @@ const sharedLayers = ydoc.getMap<LayerData>("layers");
 type StickyLayer = {
   type: "sticky";
   x: number; y: number;
-  width?: number;   // default 200
-  height?: number;  // default 150
+  width?: number;    // default 200
+  height?: number;   // default 150
   text: string;
   fontSize?: number;  // default 14
   bgColor?: string;   // default "#fffbeb"
+  rotation?: number;  // degrees clockwise; default 0
 };
 
 type RectangleLayer = {
   type: "rectangle";
   x: number; y: number;
   width: number; height: number;  // default 120×120
-  fill?: string;  // default "#93c5fd"
+  fill?: string;      // default "#93c5fd"
+  rotation?: number;  // degrees clockwise; default 0
 };
 
 type CircleLayer = {
   type: "circle";
   x: number; y: number;
   width: number; height: number;  // default 120×120
-  fill?: string;  // default "#86efac"
+  fill?: string;      // default "#86efac"
+  rotation?: number;  // degrees clockwise; default 0
 };
 
 type TextLayer = {
@@ -404,6 +407,8 @@ A fully-integrated AI assistant that can create, update, arrange, and delete boa
 
 All colors are CSS hex strings (e.g. `"#fbbf24"`). The AI is instructed to omit default properties (`rotation: 0`, `opacity: 1`, `fontSize: 16`, etc.) to minimise output tokens.
 
+**Rotation support:** `create_layer`, `create_bulk_layers`, and `update_layers` all accept a `rotation` field (degrees clockwise) for `sticky`, `rectangle`, and `circle` layer types. `ai-executor.ts` defaults `rotation` to `0` in all three builders and passes it through `update_layers` when present in the `properties` payload.
+
 #### Model Routing
 
 Every request selects a model based on the last user message:
@@ -591,18 +596,20 @@ Exports:
 
 - Drag: batch drag via `onDragStart / onDragDelta / onDragEnd`
 - Resize: 4 corner handles with directional logic
+- **Rotation:** when selected, a `RotateCw` icon handle appears on a short connector line 44 px above the shape's top-center. Dragging it rotates the shape around its geometric center. Angle is computed in world space via `Math.atan2` relative to the shape's center; each frame update is written with `ydoc.transact()`.
 - Edit: double-click → `<textarea>`, Escape/Enter saves to `sharedLayers`
 - Selection: shows blue border ring; click calls `onSelect(shiftKey)`
-- Configurable: `fontSize` (default 14), `bgColor` (default `#fffbeb`)
+- Configurable: `fontSize` (default 14), `bgColor` (default `#fffbeb`), `rotation` (default 0°)
 - Min size: 80×60 px
+- CSS: `transform: rotate(${rotation}deg); transform-origin: center` on the root div
 
 ### `components/ShapeRectangle.tsx`
 
-Same drag/resize/select pattern. Configurable `fill` (default `#93c5fd`). Min size 60×60 px.
+Same drag/resize/select pattern. Configurable `fill` (default `#93c5fd`), `rotation` (default 0°). Min size 60×60 px. Rotation handle and CSS transform identical to StickyNote.
 
 ### `components/ShapeCircle.tsx`
 
-Same as rectangle. `border-radius: 50%` makes it circular. Shift-constrained resize to square. Configurable `fill` (default `#86efac`).
+Same as rectangle. `border-radius: 50%` makes it circular. Shift-constrained resize to square. Configurable `fill` (default `#86efac`), `rotation` (default 0°). Rotation handle and CSS transform identical to StickyNote.
 
 ### `components/TextElement.tsx`
 
@@ -686,6 +693,8 @@ Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. 
 | **AI Board Agent — 6 tools** | ✅ | create_layer, create_bulk_layers, update_layers, delete_layers, arrange_grid, resize_frame_to_fit |
 | **AI Board Agent — atomic execution** | ✅ | All tool calls applied in a single `ydoc.transact` — one broadcast to all peers |
 | **AI Board Agent — blueprint prompts** | ✅ | SWOT Analysis, Retrospective, User Journey with exact pixel coordinates |
+| **Shape rotation** | ✅ | Sticky notes, rectangles, circles — drag rotation handle, CRDT-synced via `ydoc.transact`, CSS `transform: rotate()` |
+| **Rotation — AI support** | ✅ | `rotation` field accepted by `create_layer`, `create_bulk_layers`, `update_layers` in `ai-executor.ts` |
 
 ---
 
@@ -809,7 +818,7 @@ npm run dev
 
 CollabBoard is a **production-quality, self-hosted collaborative whiteboard** built on Next.js 16 + Yjs + Supabase + Clerk. Yjs handles all CRDT state, a custom provider handles transport (Supabase Realtime broadcast) and persistence (Supabase Postgres), and React components read from Yjs and write back.
 
-**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
+**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. **Shape rotation** (sticky notes, rectangles, circles) via a drag handle that writes atomically to the Yjs document and syncs to all peers. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
 
 **The AI Board Agent** is fully implemented: a floating chat UI backed by `app/api/ai/route.ts` that routes simple commands to Claude Haiku and complex templates (SWOT, Retrospective, User Journey) to Claude Sonnet. The system prompt and tool schema are ephemerally cached to cut TTFT. Six tools cover creation, bulk creation, updates, deletion, grid arrangement, and frame auto-sizing. All changes are applied atomically via `lib/ai-executor.ts` inside a single `ydoc.transact`, broadcasting to all peers instantly.
 
