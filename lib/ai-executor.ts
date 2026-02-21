@@ -24,6 +24,10 @@ const FRAME_FIT_PADDING     = 40;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function randomHex(): string {
+  return `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
 /**
  * Normalise a color from the AI — accepts CSS hex strings or legacy numeric
  * values and always returns a CSS hex string or undefined.
@@ -368,6 +372,47 @@ function handleResizeFrameToFit(
   });
 }
 
+/**
+ * generate_pattern — server-side expansion of bulk identical layers.
+ *
+ * The AI sends a single compact tool call (e.g. count:100, randomColors:true)
+ * and the executor expands it into N layers without the LLM enumerating each
+ * one. This collapses "Create 100 rectangles" from ~5 000 output tokens to ~30.
+ */
+function handleGeneratePattern(
+  args: Record<string, unknown>,
+  sharedLayers: Y.Map<LayerData>,
+): void {
+  const type    = typeof args.type === "string" ? args.type : "rectangle";
+  const count   = Math.min(toNumber(args.count, 1), 500); // hard cap at 500
+  const w       = toNumber(args.width,   DEFAULT_RECT_SIZE);
+  const h       = toNumber(args.height,  DEFAULT_RECT_SIZE);
+  const columns = toNumber(args.columns, 10);
+  const spacing = toNumber(args.spacing, GRID_SPACING);
+  const originX = toNumber(args.x,       100);
+  const originY = toNumber(args.y,       100);
+  const useRandom = args.randomColors === true;
+  const fixedFill = normaliseColor(args.fill);
+
+  const built: Array<[string, LayerData]> = [];
+
+  for (let i = 0; i < count; i++) {
+    const col  = i % columns;
+    const row  = Math.floor(i / columns);
+    const x    = originX + col * (w + spacing);
+    const y    = originY + row * (h + spacing);
+    const fill = useRandom ? randomHex() : fixedFill;
+
+    const input: Record<string, unknown> = { type, x, y, width: w, height: h, fill };
+    const layer = buildLayer(input);
+    if (layer) built.push([makeId(), layer]);
+  }
+
+  for (const [id, layer] of built) {
+    sharedLayers.set(id, layer);
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export interface AiToolCall {
@@ -390,6 +435,9 @@ export function executeAiTools(
         const args = call.input ?? {};
         // Hot path first: bulk creation is the most common AI output.
         switch (call.name) {
+          case "generate_pattern":
+            handleGeneratePattern(args, sharedLayers);
+            break;
           case "create_bulk_layers":
             handleCreateBulkLayers(args, sharedLayers);
             break;

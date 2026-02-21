@@ -25,6 +25,7 @@ interface ApiMessage {
 const STATUS_WORKING  = "AI is working…";
 const STATUS_SLOW     = "Still generating…";
 const SLOW_THRESHOLD  = 4_000; // ms before escalating the status label
+const MAX_HISTORY     = 6;     // keep last 3 user+assistant turn pairs
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -40,12 +41,48 @@ function summariseToolCalls(toolCalls: AiToolCall[]): string {
   return `Done — ${parts.join(", ")}.`;
 }
 
-/** Serialise the live Yjs layer map to a plain array for board context. */
+/**
+ * Compact board state serialiser.
+ * Strips defaults and uses short keys to minimise input tokens.
+ * Only the 'id' field is consumed by the AI; the rest provides context.
+ */
 function getBoardState() {
-  return Array.from(sharedLayers.entries()).map(([id, layer]) => ({
-    id,
-    ...layer,
-  }));
+  return Array.from(sharedLayers.entries()).map(([id, layer]) => {
+    const l = layer as Record<string, unknown>;
+    const entry: Record<string, unknown> = { id, t: layer.type };
+
+    if (l.x != null)  entry.x = l.x;
+    if (l.y != null)  entry.y = l.y;
+    if (l.width  != null) entry.w = l.width;
+    if (l.height != null) entry.h = l.height;
+
+    // Unified color field (different names per layer type)
+    const color = l.fill ?? l.bgColor ?? l.backgroundColor;
+    if (color) entry.f = color;
+
+    // Text color only if non-default
+    if (l.color && l.color !== "#000000") entry.c = l.color;
+
+    // Truncate long text so board state stays compact
+    if (l.text)  entry.tx = (l.text as string).slice(0, 60);
+    if (l.title) entry.ti = l.title;
+
+    // Skip rotation when 0 (default)
+    if (l.rotation && (l.rotation as number) !== 0) entry.r = l.rotation;
+
+    return entry;
+  });
+}
+
+/**
+ * Decide whether to include the board state in the request.
+ * Pure creation prompts don't need existing layer IDs.
+ */
+const NEEDS_BOARD_STATE_RE =
+  /\b(rotate|move|delete|remove|update|recolor|resize|rearrange|arrange|scale|flip|all|every|existing|selected|current|them|those|these)\b/i;
+
+function needsBoardState(text: string): boolean {
+  return NEEDS_BOARD_STATE_RE.test(text);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -65,7 +102,6 @@ export function AIChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [displayMessages, isLoading]);
 
-  // Clear the slow-response timer whenever loading finishes.
   useEffect(() => {
     if (!isLoading) {
       if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
@@ -87,19 +123,24 @@ export function AIChat() {
     if (!text || isLoading) return;
 
     const userApiMsg: ApiMessage = { role: "user", content: text };
-    const nextApiMessages = [...apiMessages, userApiMsg];
+
+    // Trim history to last MAX_HISTORY messages to keep input tokens bounded.
+    const trimmedHistory = apiMessages.slice(-MAX_HISTORY);
+    const nextApiMessages = [...trimmedHistory, userApiMsg];
 
     setDisplayMessages((prev) => [...prev, { role: "user", content: text }]);
     setApiMessages(nextApiMessages);
     setInput("");
 
-    // Show working state immediately — before the fetch even starts.
     setIsLoading(true);
     setStatusText(STATUS_WORKING);
     startSlowTimer();
 
+    const collectedCalls: AiToolCall[] = [];
+    let tier: "fast" | "reasoning" = "fast";
+
     try {
-      const boardState = getBoardState();
+      const boardState = needsBoardState(text) ? getBoardState() : [];
 
       const res = await fetch("/api/ai", {
         method: "POST",
@@ -107,30 +148,63 @@ export function AIChat() {
         body: JSON.stringify({ messages: nextApiMessages, boardState }),
       });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({ error: "Unknown error" }));
         throw new Error(err.error ?? `HTTP ${res.status}`);
       }
 
-      const data = await res.json();
-      const toolCalls: AiToolCall[] = data.toolCalls ?? [];
-      const tier: "fast" | "reasoning" = data.tier ?? "fast";
+      // ── Parse SSE stream ────────────────────────────────────────────────────
+      // Each fully-formed tool call is emitted as soon as it's assembled
+      // server-side and executed immediately — no waiting for the full response.
 
-      let assistantText: string;
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer    = "";
 
-      if (toolCalls.length > 0) {
-        // Execute immediately — zero client-side delay after the response lands.
-        executeAiTools(toolCalls, sharedLayers, ydoc);
-        assistantText = summariseToolCalls(toolCalls);
-      } else {
-        assistantText = "No board changes were made.";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newline.
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.startsWith("data: ")) continue;
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(part.slice(6));
+          } catch {
+            continue;
+          }
+
+          if (parsed.type === "tool_call") {
+            const tc: AiToolCall = {
+              name:  parsed.name  as string,
+              input: parsed.input as Record<string, unknown>,
+            };
+            collectedCalls.push(tc);
+            // Execute each tool call the moment it arrives from the stream.
+            executeAiTools([tc], sharedLayers, ydoc);
+          } else if (parsed.type === "done") {
+            tier = (parsed.tier as "fast" | "reasoning") ?? "fast";
+          } else if (parsed.type === "error") {
+            throw new Error(parsed.message as string);
+          }
+        }
       }
+
+      const assistantText =
+        collectedCalls.length > 0
+          ? summariseToolCalls(collectedCalls)
+          : "No board changes were made.";
 
       setDisplayMessages((prev) => [
         ...prev,
         { role: "assistant", content: assistantText, tier },
       ]);
-      // Keep text-only history so follow-up turns remain valid.
       setApiMessages((prev) => [
         ...prev,
         { role: "assistant", content: assistantText },
