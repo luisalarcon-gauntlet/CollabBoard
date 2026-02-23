@@ -5,6 +5,13 @@ export function cn(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(' ');
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Returns true when `id` matches the canonical UUID v4 format. */
+export function isValidUUID(id: string): boolean {
+  return UUID_RE.test(id);
+}
+
 /**
  * Returns the IDs of all layers whose bounding boxes are fully contained within
  * the given frame's (x, y, width, height). Connectors and other frames are skipped.

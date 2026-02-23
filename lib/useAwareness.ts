@@ -11,14 +11,14 @@ export interface AwarenessUser {
 }
 
 /**
- * Subscribe to Yjs Awareness changes and return a list of
- * remote users (excludes local client). Returns [] when not on client.
+ * Subscribe to Yjs Awareness changes for the given board and return a list of
+ * remote users (excludes local client). Returns [] when not on client or boardId is null.
  */
-export function useAwareness(): AwarenessUser[] {
+export function useAwareness(boardId: string | null | undefined): AwarenessUser[] {
   const [users, setUsers] = useState<AwarenessUser[]>([]);
 
   const refresh = useCallback(() => {
-    const awareness = getAwareness();
+    const awareness = getAwareness(boardId ?? null);
     if (!awareness) return;
     const states = awareness.getStates();
     const localId = awareness.clientID;
@@ -34,10 +34,10 @@ export function useAwareness(): AwarenessUser[] {
       });
     });
     setUsers(result);
-  }, []);
+  }, [boardId]);
 
   useEffect(() => {
-    const awareness = getAwareness();
+    const awareness = getAwareness(boardId ?? null);
     if (!awareness) return;
     const handler = () => refresh();
     awareness.on("change", handler);
@@ -45,7 +45,7 @@ export function useAwareness(): AwarenessUser[] {
     return () => {
       awareness.off("change", handler);
     };
-  }, [refresh]);
+  }, [boardId, refresh]);
 
   return users;
 }

@@ -2,13 +2,19 @@
   "name": "collab-board",
   "version": "0.1.0",
   "private": true,
+  "overrides": {
+    "yjs": "^13.6.29",
+    "lib0": "^0.2.117"
+  },
   "scripts": {
     "dev": "next dev",
     "dev:turbo": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -22,6 +28,10 @@
     "yjs": "^13.6.29"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

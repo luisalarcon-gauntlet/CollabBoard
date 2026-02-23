@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { RotateCw } from "lucide-react";
 import type { StickyLayer } from "@/lib/yjs-store";
-import { sharedLayers, ydoc } from "@/lib/yjs-store";
+import { getSharedLayers, getYdoc } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./StickyNote.module.css";
 
@@ -15,6 +15,7 @@ const DEFAULT_HEIGHT = 150;
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 interface StickyNoteProps {
+  boardId: string;
   id: string;
   layer: StickyLayer;
   selected: boolean;
@@ -27,6 +28,7 @@ interface StickyNoteProps {
 }
 
 export function StickyNote({
+  boardId,
   id,
   layer,
   selected,
@@ -65,12 +67,14 @@ export function StickyNote({
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as StickyLayer | undefined;
       if (current?.type === "sticky") {
         sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
       }
     },
-    [id]
+    [boardId, id]
   );
 
   const handleResizePointerMove = useCallback(
@@ -209,14 +213,18 @@ export function StickyNote({
       const cy = y + height / 2;
       const currentAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
       const newRotation = rotateStartRef.current.startRotation + (currentAngle - rotateStartRef.current.startAngle);
-      ydoc.transact(() => {
-        const current = sharedLayers.get(id) as StickyLayer | undefined;
-        if (current?.type === "sticky") {
-          sharedLayers.set(id, { ...current, rotation: newRotation });
-        }
-      });
+      const ydoc = getYdoc(boardId);
+      const sharedLayers = getSharedLayers(boardId);
+      if (ydoc && sharedLayers) {
+        ydoc.transact(() => {
+          const current = sharedLayers.get(id) as StickyLayer | undefined;
+          if (current?.type === "sticky") {
+            sharedLayers.set(id, { ...current, rotation: newRotation });
+          }
+        });
+      }
     },
-    [id, x, y, width, height, getScreenPos, screenToWorld]
+    [boardId, id, x, y, width, height, getScreenPos, screenToWorld]
   );
 
   const handleRotatePointerUp = useCallback(
@@ -238,13 +246,15 @@ export function StickyNote({
 
   const commitText = useCallback(() => {
     setIsEditing(false);
+    const sharedLayers = getSharedLayers(boardId);
+    if (!sharedLayers) return;
     const current = sharedLayers.get(id) as StickyLayer | undefined;
     if (current?.type === "sticky" && editValue.trim() !== current.text) {
       sharedLayers.set(id, { ...current, text: editValue.trim() || "New note" });
     } else {
       setEditValue(layer.text);
     }
-  }, [id, editValue, layer.text]);
+  }, [boardId, id, editValue, layer.text]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

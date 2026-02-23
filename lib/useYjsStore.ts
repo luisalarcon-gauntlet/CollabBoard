@@ -1,29 +1,45 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { sharedLayers, type LayerData } from "./yjs-store";
+import { getSharedLayers, getProvider, type LayerData } from "./yjs-store";
 
 /**
- * Subscribe to the shared Yjs "layers" map and force a React re-render
- * whenever the map changes (local or remote).
+ * Subscribe to the shared Yjs "layers" map for the given board and force a
+ * React re-render whenever the map changes (local or remote).
+ *
+ * Also awaits the provider's `loaded` promise so that data applied by
+ * loadFromDb before the observer was attached is captured.
  */
-export function useYjsStore(): Map<string, LayerData> {
-  const [snapshot, setSnapshot] = useState<Map<string, LayerData>>(
-    () => new Map(sharedLayers.entries())
-  );
+export function useYjsStore(boardId: string | null | undefined): Map<string, LayerData> {
+  const [snapshot, setSnapshot] = useState<Map<string, LayerData>>(() => new Map());
 
   const refresh = useCallback(() => {
-    setSnapshot(new Map(sharedLayers.entries()));
-  }, []);
+    const layers = getSharedLayers(boardId ?? null);
+    setSnapshot(layers ? new Map(layers.entries()) : new Map());
+  }, [boardId]);
 
   useEffect(() => {
-    sharedLayers.observe(refresh);
-    // Hydrate once in case data arrived before mount
+    const layers = getSharedLayers(boardId ?? null);
+    if (!layers) {
+      setSnapshot(new Map());
+      return;
+    }
     refresh();
+    layers.observe(refresh);
+
+    let cancelled = false;
+    const provider = getProvider(boardId ?? null);
+    if (provider) {
+      provider.loaded.then(() => {
+        if (!cancelled) refresh();
+      });
+    }
+
     return () => {
-      sharedLayers.unobserve(refresh);
+      cancelled = true;
+      layers.unobserve(refresh);
     };
-  }, [refresh]);
+  }, [boardId, refresh]);
 
   return snapshot;
 }

@@ -9,6 +9,15 @@
   z-index: 10;
 }
 
+/* Inline variant for use inside top-left bar (no absolute positioning) */
+.containerInline {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .userCard {
   display: flex;
   align-items: center;

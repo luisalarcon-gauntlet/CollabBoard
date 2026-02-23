@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { throttleTrailing } from "@/lib/throttle";
 import { useUser } from "@clerk/nextjs";
 import { useYjsStore } from "@/lib/useYjsStore";
-import { sharedLayers, getAwareness, ensurePersistence, ydoc, setConnectionStatusCallback } from "@/lib/yjs-store";
+import { getSharedLayers, getYdoc, getAwareness, ensurePersistence, setConnectionStatusCallback, destroyProvider } from "@/lib/yjs-store";
 import type { ConnectionStatus } from "@/lib/yjs-store";
 import type {
   LineLayer,
@@ -43,7 +43,10 @@ import {
   Spline,
   Frame as FrameIcon,
   WifiOff,
+  ArrowLeft,
+  Link2,
 } from "lucide-react";
+import Link from "next/link";
 import styles from "./Whiteboard.module.css";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -113,16 +116,20 @@ function generateId(prefix: string) {
  * Lines are excluded from both passes (no meaningful center/edge point).
  * Connectors are excluded (self-referential edge).
  */
-function hitTestShapeLayers(wx: number, wy: number): string | null {
+function hitTestShapeLayers(
+  layers: { entries(): IterableIterator<[string, LayerData]> },
+  wx: number,
+  wy: number
+): string | null {
   // Pass 1: non-frame shapes
-  for (const [id, layer] of sharedLayers.entries()) {
+  for (const [id, layer] of layers.entries()) {
     if (!layer || layer.type === "connector" || layer.type === "line" || layer.type === "frame") continue;
     const bounds = getLayerBounds(layer);
     if (!bounds) continue;
     if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) return id;
   }
   // Pass 2: frames (lower priority so inner shapes are preferred)
-  for (const [id, layer] of sharedLayers.entries()) {
+  for (const [id, layer] of layers.entries()) {
     if (!layer || layer.type !== "frame") continue;
     const bounds = getLayerBounds(layer);
     if (!bounds) continue;
@@ -269,8 +276,11 @@ function ConnectorEndpointControl({ value, onChange }: ConnectorEndpointControlP
 
 // ── Main whiteboard ───────────────────────────────────────────────────────────
 
-function WhiteboardInner() {
-  const layers = useYjsStore();
+function WhiteboardInner({ boardId }: { boardId: string }) {
+  // Safe to call unconditionally — WhiteboardClient guarantees we're client-side.
+  const sharedLayers = getSharedLayers(boardId)!;
+  const ydoc = getYdoc(boardId)!;
+  const layers = useYjsStore(boardId);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -306,17 +316,20 @@ function WhiteboardInner() {
   const showHelpRef = useRef(false);
   showHelpRef.current = showHelp;
 
+  // Share link feedback
+  const [shareCopied, setShareCopied] = useState(false);
+
   // Connection status badge
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connected");
   const onStatusChange = useCallback((status: ConnectionStatus) => {
     setConnectionStatus(status);
   }, []);
   useEffect(() => {
-    setConnectionStatusCallback(onStatusChange);
+    setConnectionStatusCallback(boardId, onStatusChange);
     return () => {
-      setConnectionStatusCallback(null);
+      setConnectionStatusCallback(boardId, null);
     };
-  }, [onStatusChange]);
+  }, [boardId, onStatusChange]);
 
   // ── Connector tool state ─────────────────────────────────────────────────
 
@@ -383,14 +396,12 @@ function WhiteboardInner() {
 
   // ── Effects ─────────────────────────────────────────────────────────────
 
-  useEffect(() => { ensurePersistence(); }, []);
-
   // Create the awareness-cursor throttle exactly once per mount.
   // Reading awareness inside the callback (rather than capturing it here)
   // ensures we always use the live instance even if it changes.
   useEffect(() => {
     const throttled = throttleTrailing((x: number, y: number) => {
-      const awareness = getAwareness();
+      const awareness = getAwareness(boardId);
       if (!awareness) return;
       const prev = awareness.getLocalState()?.user as
         | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
@@ -399,23 +410,24 @@ function WhiteboardInner() {
     }, 33);
     cursorThrottleRef.current = throttled;
     return () => throttled.cancel();
-  }, []);
+  }, [boardId]);
 
   useEffect(() => {
-    const awareness = getAwareness();
+    const awareness = getAwareness(boardId);
     if (!user || !awareness) return;
     awareness.setLocalStateField("user", {
       name: [user.firstName, user.lastName].filter(Boolean).join(" ") || user.id,
       avatar: user.imageUrl ?? undefined,
       cursor: null,
     });
-  }, [user]);
+  }, [boardId, user]);
 
   // ── Orphan connector cleanup ─────────────────────────────────────────────
   // Observes the Y.Map and purges any connector whose fromId or toId no longer
   // exists — runs in a new transaction after the triggering one completes.
 
   useEffect(() => {
+    if (!sharedLayers || !ydoc) return;
     const cleanup = () => {
       const toDelete: string[] = [];
       for (const [id, layer] of sharedLayers.entries()) {
@@ -433,7 +445,7 @@ function WhiteboardInner() {
     };
     sharedLayers.observe(cleanup);
     return () => sharedLayers.unobserve(cleanup);
-  }, []);
+  }, [sharedLayers, ydoc]);
 
   // ── Selection handler ───────────────────────────────────────────────────
 
@@ -530,13 +542,13 @@ function WhiteboardInner() {
     // Bypass the throttle entirely: cancel any pending trailing cursor send,
     // then immediately null out the remote cursor so it disappears at once.
     cursorThrottleRef.current?.cancel();
-    const awareness = getAwareness();
+    const awareness = getAwareness(boardId);
     if (!awareness) return;
     const prev = awareness.getLocalState()?.user as
       | { name?: string; avatar?: string; cursor?: { x: number; y: number } | null }
       | undefined;
     awareness.setLocalStateField("user", { ...prev, cursor: null });
-  }, []);
+  }, [boardId]);
 
   // ── Zoom ────────────────────────────────────────────────────────────────
 
@@ -668,13 +680,13 @@ function WhiteboardInner() {
         setConnectorDraftState(updated);
 
         // Still track hover for target snapping feedback
-        const hoverId = hitTestShapeLayers(world.x, world.y);
+        const hoverId = hitTestShapeLayers(sharedLayers, world.x, world.y);
         const targetId = hoverId !== connectorDraftRef.current?.fromId ? hoverId : null;
         if (targetId !== connectorHoverIdRef.current) {
           setConnectorHoverId(targetId);
         }
       } else {
-        const hoverId = hitTestShapeLayers(world.x, world.y);
+        const hoverId = hitTestShapeLayers(sharedLayers, world.x, world.y);
         if (hoverId !== connectorHoverIdRef.current) {
           setConnectorHoverId(hoverId);
         }
@@ -690,7 +702,7 @@ function WhiteboardInner() {
       if (!pos) return;
       const world = screenToWorld(pos.sx, pos.sy);
 
-      const hoverId = hitTestShapeLayers(world.x, world.y);
+      const hoverId = hitTestShapeLayers(sharedLayers, world.x, world.y);
       if (!hoverId) return;
 
       const fromLayer = sharedLayers.get(hoverId);
@@ -719,7 +731,7 @@ function WhiteboardInner() {
       const pos = getScreenPos(e);
       if (pos) {
         const world = screenToWorld(pos.sx, pos.sy);
-        const toId = hitTestShapeLayers(world.x, world.y);
+        const toId = hitTestShapeLayers(sharedLayers, world.x, world.y);
         if (toId && toId !== draft.fromId) {
           const connId = generateId("connector");
           const conn: ConnectorLayer = {
@@ -980,35 +992,40 @@ function WhiteboardInner() {
   }, [containerRef, screenToWorld]);
 
   const addSticky = useCallback(() => {
+    if (!sharedLayers) return;
     const { x, y } = viewportCenter();
     const id = generateId("sticky");
     sharedLayers.set(id, { type: "sticky", x: x - DEFAULT_STICKY_WIDTH / 2, y: y - DEFAULT_STICKY_HEIGHT / 2, width: DEFAULT_STICKY_WIDTH, height: DEFAULT_STICKY_HEIGHT, text: "New note" });
     updateSelectedIds(new Set([id]));
-  }, [viewportCenter, updateSelectedIds]);
+  }, [sharedLayers, viewportCenter, updateSelectedIds]);
 
   const addRectangle = useCallback(() => {
+    if (!sharedLayers) return;
     const { x, y } = viewportCenter();
     const id = generateId("rect");
     sharedLayers.set(id, { type: "rectangle", x: x - DEFAULT_RECT_SIZE / 2, y: y - DEFAULT_RECT_SIZE / 2, width: DEFAULT_RECT_SIZE, height: DEFAULT_RECT_SIZE, fill: "#93c5fd" });
     updateSelectedIds(new Set([id]));
-  }, [viewportCenter, updateSelectedIds]);
+  }, [sharedLayers, viewportCenter, updateSelectedIds]);
 
   const addCircle = useCallback(() => {
+    if (!sharedLayers) return;
     const { x, y } = viewportCenter();
     const id = generateId("circle");
     sharedLayers.set(id, { type: "circle", x: x - DEFAULT_CIRCLE_SIZE / 2, y: y - DEFAULT_CIRCLE_SIZE / 2, width: DEFAULT_CIRCLE_SIZE, height: DEFAULT_CIRCLE_SIZE, fill: "#86efac" });
     updateSelectedIds(new Set([id]));
-  }, [viewportCenter, updateSelectedIds]);
+  }, [sharedLayers, viewportCenter, updateSelectedIds]);
 
   const addText = useCallback(() => {
+    if (!sharedLayers) return;
     const { x, y } = viewportCenter();
     const id = generateId("text");
     sharedLayers.set(id, { type: "text", x: x - DEFAULT_TEXT_WIDTH / 2, y: y - DEFAULT_TEXT_HEIGHT / 2, width: DEFAULT_TEXT_WIDTH, height: DEFAULT_TEXT_HEIGHT, text: "Text", fontSize: 16, fontWeight: "normal", color: "#1e293b" });
     updateSelectedIds(new Set([id]));
-  }, [viewportCenter, updateSelectedIds]);
+  }, [sharedLayers, viewportCenter, updateSelectedIds]);
 
   const addLine = useCallback(
     (lineVariant: "straight" | "arrow") => {
+      if (!sharedLayers) return;
       const { x, y } = viewportCenter();
       const id = generateId("line");
       const x1 = x - DEFAULT_LINE_LENGTH / 2;
@@ -1016,10 +1033,11 @@ function WhiteboardInner() {
       sharedLayers.set(id, { type: "line", x: x1, y, points: [[x1, y], [x2, y]], color: "#1e293b", thickness: 2, variant: lineVariant });
       updateSelectedIds(new Set([id]));
     },
-    [viewportCenter, updateSelectedIds],
+    [sharedLayers, viewportCenter, updateSelectedIds],
   );
 
   const addFrame = useCallback(() => {
+    if (!sharedLayers) return;
     const { x, y } = viewportCenter();
     const id = generateId("frame");
     sharedLayers.set(id, {
@@ -1032,7 +1050,7 @@ function WhiteboardInner() {
       backgroundColor: "rgba(241, 245, 249, 0.7)",
     });
     updateSelectedIds(new Set([id]));
-  }, [viewportCenter, updateSelectedIds]);
+  }, [sharedLayers, viewportCenter, updateSelectedIds]);
 
   const resetView = useCallback(() => {
     if (!containerRef.current) return;
@@ -1183,6 +1201,7 @@ function WhiteboardInner() {
           return (
             <FrameElement
               key={id}
+              boardId={boardId}
               id={id}
               layer={layer as FrameLayer}
               selected={selectedIds.has(id)}
@@ -1219,35 +1238,35 @@ function WhiteboardInner() {
           const selected = selectedIds.has(id);
 
           if (layer.type === "sticky") return (
-            <StickyNote key={id} id={id} layer={layer as StickyLayer} selected={selected}
+            <StickyNote key={id} boardId={boardId} id={id} layer={layer as StickyLayer} selected={selected}
               onSelect={(sk) => handleSelect(id, sk)}
               onDragStart={() => handleDragStart(id)}
               onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
               screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
           );
           if (layer.type === "rectangle") return (
-            <ShapeRectangle key={id} id={id} layer={layer as RectangleLayer} selected={selected}
+            <ShapeRectangle key={id} boardId={boardId} id={id} layer={layer as RectangleLayer} selected={selected}
               onSelect={(sk) => handleSelect(id, sk)}
               onDragStart={() => handleDragStart(id)}
               onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
               screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
           );
           if (layer.type === "circle") return (
-            <ShapeCircle key={id} id={id} layer={layer as CircleLayer} selected={selected}
+            <ShapeCircle key={id} boardId={boardId} id={id} layer={layer as CircleLayer} selected={selected}
               onSelect={(sk) => handleSelect(id, sk)}
               onDragStart={() => handleDragStart(id)}
               onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
               screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
           );
           if (layer.type === "text") return (
-            <TextElement key={id} id={id} layer={layer as TextLayer} selected={selected}
+            <TextElement key={id} boardId={boardId} id={id} layer={layer as TextLayer} selected={selected}
               onSelect={(sk) => handleSelect(id, sk)}
               onDragStart={() => handleDragStart(id)}
               onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
               screenToWorld={screenToWorld} getScreenPos={getScreenPos} />
           );
           if (layer.type === "line") return (
-            <LineElement key={id} id={id} layer={layer as LineLayer} selected={selected}
+            <LineElement key={id} boardId={boardId} id={id} layer={layer as LineLayer} selected={selected}
               onSelect={(sk) => handleSelect(id, sk)}
               onDragStart={() => handleDragStart(id)}
               onDragDelta={handleDragDelta} onDragEnd={handleDragEnd}
@@ -1334,8 +1353,32 @@ function WhiteboardInner() {
         />
       )}
 
-      <Avatars />
-      <CursorPresence />
+      <div className={styles.topLeftBar}>
+        <Link
+          href="/dashboard"
+          className={styles.backButton}
+          aria-label="Back to Dashboard"
+        >
+          <ArrowLeft size={20} />
+          Back to Dashboard
+        </Link>
+        <button
+          type="button"
+          className={styles.backButton}
+          aria-label="Copy share link"
+          onClick={() => {
+            navigator.clipboard.writeText(window.location.href).then(() => {
+              setShareCopied(true);
+              setTimeout(() => setShareCopied(false), 2000);
+            });
+          }}
+        >
+          <Link2 size={20} />
+          {shareCopied ? "Copied!" : "Share Board"}
+        </button>
+        <Avatars boardId={boardId} inline />
+      </div>
+      <CursorPresence boardId={boardId} />
 
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className={styles.toolbar}>
@@ -1485,10 +1528,44 @@ function WhiteboardInner() {
   );
 }
 
-export function Whiteboard() {
+/**
+ * SSR guard + provider lifecycle owner.
+ *
+ * WhiteboardClient is responsible for:
+ *   1. Staying on the server-safe side of the React tree (no window access).
+ *   2. Calling ensurePersistence(boardId) so boardStore is populated BEFORE
+ *      WhiteboardInner renders — this keeps the getSharedLayers(boardId)!
+ *      non-null assertion in WhiteboardInner always safe.
+ *   3. Calling destroyProvider(boardId) on unmount or boardId change so the
+ *      Yjs provider is torn down exactly once per mount, with no duplicate
+ *      providers during rapid navigation (fixes Bug §16.13).
+ *
+ * readyForId tracks which boardId has been fully initialised.  When boardId
+ * changes (navigation to a new board), readyForId !== boardId causes the
+ * loading state to show again while the new board initialises.
+ */
+function WhiteboardClient({ boardId }: { boardId: string }) {
+  const [readyForId, setReadyForId] = useState<string | null>(null);
+
+  useEffect(() => {
+    ensurePersistence(boardId);
+    setReadyForId(boardId);
+    return () => { void destroyProvider(boardId); };
+  }, [boardId]);
+
+  if (readyForId !== boardId) return <div className={styles.loading}>Loading board…</div>;
+  return <WhiteboardInner boardId={boardId} />;
+}
+
+export interface WhiteboardProps {
+  boardId: string;
+}
+
+export function Whiteboard({ boardId }: WhiteboardProps) {
+  if (!boardId) return null;
   return (
     <BoardTransformProvider>
-      <WhiteboardInner />
+      <WhiteboardClient boardId={boardId} />
     </BoardTransformProvider>
   );
 }

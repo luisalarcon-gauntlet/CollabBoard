@@ -3,11 +3,20 @@
 import { useAwareness } from "@/lib/useAwareness";
 import styles from "./Avatars.module.css";
 
-export function Avatars() {
-  const users = useAwareness();
+export function Avatars({
+  boardId,
+  inline,
+}: {
+  boardId: string;
+  inline?: boolean;
+}) {
+  const users = useAwareness(boardId);
 
   return (
-    <div className={styles.container}>
+    <div
+      className={inline ? styles.containerInline : styles.container}
+      aria-label="Collaborators present"
+    >
       {users.map((user) => {
         const { name, avatar, clientId } = user;
         return (

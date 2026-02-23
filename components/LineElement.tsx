@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useRef } from "react";
 import type { LineLayer } from "@/lib/yjs-store";
-import { sharedLayers } from "@/lib/yjs-store";
+import { getSharedLayers } from "@/lib/yjs-store";
 import styles from "./LineElement.module.css";
 
 const SVG_PAD = 20;
@@ -18,6 +18,7 @@ function bboxOrigin(pts: [number, number][]): { x: number; y: number } {
 }
 
 interface LineElementProps {
+  boardId: string;
   id: string;
   layer: LineLayer;
   selected: boolean;
@@ -30,6 +31,7 @@ interface LineElementProps {
 }
 
 function LineElementInner({
+  boardId,
   id,
   layer,
   selected,
@@ -53,12 +55,14 @@ function LineElementInner({
 
   const updateLayerPoints = useCallback(
     (newPoints: [number, number][]) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as LineLayer | undefined;
       if (!current || current.type !== "line") return;
       const { x, y } = bboxOrigin(newPoints);
       sharedLayers.set(id, { ...current, points: newPoints, x, y });
     },
-    [id]
+    [boardId, id]
   );
 
   // ── Geometry ─────────────────────────────────────────────────────────────

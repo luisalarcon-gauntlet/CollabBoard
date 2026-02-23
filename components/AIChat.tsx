@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, FormEvent } from "react";
 import { Sparkles, Send, ChevronDown } from "lucide-react";
-import { sharedLayers, ydoc } from "@/lib/yjs-store";
+import { getSharedLayers, getYdoc } from "@/lib/yjs-store";
 import { executeAiTools, type AiToolCall } from "@/lib/ai-executor";
 import styles from "./AIChat.module.css";
 
@@ -46,7 +46,9 @@ function summariseToolCalls(toolCalls: AiToolCall[]): string {
  * Strips defaults and uses short keys to minimise input tokens.
  * Only the 'id' field is consumed by the AI; the rest provides context.
  */
-function getBoardState() {
+function getBoardState(boardId: string) {
+  const sharedLayers = getSharedLayers(boardId);
+  if (!sharedLayers) return [];
   return Array.from(sharedLayers.entries()).map(([id, layer]) => {
     const l = layer as Record<string, unknown>;
     const entry: Record<string, unknown> = { id, t: layer.type };
@@ -87,7 +89,7 @@ function needsBoardState(text: string): boolean {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function AIChat() {
+export function AIChat({ boardId }: { boardId: string }) {
   const [isOpen,          setIsOpen]          = useState(false);
   const [input,           setInput]           = useState("");
   const [displayMessages, setDisplayMessages] = useState<DisplayMessage[]>([]);
@@ -140,7 +142,7 @@ export function AIChat() {
     let tier: "fast" | "reasoning" = "fast";
 
     try {
-      const boardState = needsBoardState(text) ? getBoardState() : [];
+      const boardState = needsBoardState(text) ? getBoardState(boardId) : [];
 
       const res = await fetch("/api/ai", {
         method: "POST",
@@ -187,7 +189,9 @@ export function AIChat() {
             };
             collectedCalls.push(tc);
             // Execute each tool call the moment it arrives from the stream.
-            executeAiTools([tc], sharedLayers, ydoc);
+            const layers = getSharedLayers(boardId);
+            const doc = getYdoc(boardId);
+            if (layers && doc) executeAiTools([tc], layers, doc);
           } else if (parsed.type === "done") {
             tier = (parsed.tier as "fast" | "reasoning") ?? "fast";
           } else if (parsed.type === "error") {

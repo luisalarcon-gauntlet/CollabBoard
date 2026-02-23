@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { TextLayer } from "@/lib/yjs-store";
-import { sharedLayers } from "@/lib/yjs-store";
+import { getSharedLayers } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./TextElement.module.css";
 
@@ -12,6 +12,7 @@ const MIN_HEIGHT = 24;
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 interface TextElementProps {
+  boardId: string;
   id: string;
   layer: TextLayer;
   selected: boolean;
@@ -24,6 +25,7 @@ interface TextElementProps {
 }
 
 function TextElementInner({
+  boardId,
   id,
   layer,
   selected,
@@ -58,12 +60,14 @@ function TextElementInner({
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as TextLayer | undefined;
       if (current?.type === "text") {
         sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
       }
     },
-    [id]
+    [boardId, id]
   );
 
   const handleResizePointerMove = useCallback(
@@ -186,6 +190,8 @@ function TextElementInner({
 
   const commitText = useCallback(() => {
     setIsEditing(false);
+    const sharedLayers = getSharedLayers(boardId);
+    if (!sharedLayers) return;
     const current = sharedLayers.get(id) as TextLayer | undefined;
     if (!current || current.type !== "text") return;
     const trimmed = editValue.trim() || "Text";
@@ -194,7 +200,7 @@ function TextElementInner({
       : current.height;
     sharedLayers.set(id, { ...current, text: trimmed, height: newHeight });
     setEditValue(trimmed);
-  }, [id, editValue]);
+  }, [boardId, id, editValue]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

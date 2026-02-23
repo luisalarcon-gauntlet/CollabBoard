@@ -139,15 +139,15 @@ describe("SupabaseYjsProvider – connection status", () => {
 
       expect(statuses).toContain("disconnected");
 
-      provider.destroy();
+      await provider.destroy();
     }
   );
 
   // ── Test 2 ────────────────────────────────────────────────────────────────
   it(
-    "Test 2: window 'offline' event fires 'disconnected'; window 'online' fires 'connected'",
+    "Test 2: window 'offline' event fires 'disconnected'; window 'online' re-subscribes and fires 'connected'",
     async () => {
-      const { mockSupabase } = createMockSupabase();
+      const { mockSupabase, triggerChannelStatus } = createMockSupabase();
       const provider = await buildProvider(mockSupabase);
 
       const statuses: ConnectionStatus[] = [];
@@ -160,11 +160,13 @@ describe("SupabaseYjsProvider – connection status", () => {
       windowCapture.fire("offline");
       expect(statuses.at(-1)).toBe("disconnected");
 
-      // Simulate coming back online
+      // Going online tears down the stale channel and opens a fresh one.
+      // "connected" is emitted only once the new channel's subscribe fires.
       windowCapture.fire("online");
+      triggerChannelStatus("SUBSCRIBED");
       expect(statuses.at(-1)).toBe("connected");
 
-      provider.destroy();
+      await provider.destroy();
     }
   );
 
@@ -185,7 +187,7 @@ describe("SupabaseYjsProvider – connection status", () => {
       // The very first call should replay the last known status immediately
       expect(statuses[0]).toBe("disconnected");
 
-      provider.destroy();
+      await provider.destroy();
     }
   );
 });

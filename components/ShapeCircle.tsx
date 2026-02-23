@@ -3,7 +3,7 @@
 import { memo, useCallback, useRef } from "react";
 import { RotateCw } from "lucide-react";
 import type { CircleLayer } from "@/lib/yjs-store";
-import { sharedLayers, ydoc } from "@/lib/yjs-store";
+import { getSharedLayers, getYdoc } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./ShapeCircle.module.css";
 
@@ -12,6 +12,7 @@ const MIN_SIZE = 40;
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 interface ShapeCircleProps {
+  boardId: string;
   id: string;
   layer: CircleLayer;
   selected: boolean;
@@ -24,6 +25,7 @@ interface ShapeCircleProps {
 }
 
 function ShapeCircleInner({
+  boardId,
   id,
   layer,
   selected,
@@ -50,12 +52,14 @@ function ShapeCircleInner({
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as CircleLayer | undefined;
       if (current?.type === "circle") {
         sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
       }
     },
-    [id]
+    [boardId, id]
   );
 
   const handleResizePointerMove = useCallback(
@@ -211,14 +215,18 @@ function ShapeCircleInner({
       const cy = y + height / 2;
       const currentAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
       const newRotation = rotateStartRef.current.startRotation + (currentAngle - rotateStartRef.current.startAngle);
-      ydoc.transact(() => {
-        const current = sharedLayers.get(id) as CircleLayer | undefined;
-        if (current?.type === "circle") {
-          sharedLayers.set(id, { ...current, rotation: newRotation });
-        }
-      });
+      const ydoc = getYdoc(boardId);
+      const sharedLayers = getSharedLayers(boardId);
+      if (ydoc && sharedLayers) {
+        ydoc.transact(() => {
+          const current = sharedLayers.get(id) as CircleLayer | undefined;
+          if (current?.type === "circle") {
+            sharedLayers.set(id, { ...current, rotation: newRotation });
+          }
+        });
+      }
     },
-    [id, x, y, width, height, getScreenPos, screenToWorld]
+    [boardId, id, x, y, width, height, getScreenPos, screenToWorld]
   );
 
   const handleRotatePointerUp = useCallback(

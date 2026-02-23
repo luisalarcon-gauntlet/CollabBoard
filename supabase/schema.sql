@@ -31,6 +31,11 @@ create policy "Allow authenticated update"
   using (true)
   with check (true);
 
+create policy "Allow authenticated delete"
+  on yjs_updates for delete
+  to authenticated
+  using (true);
+
 -- Allow anon key (used by client SDK) the same access
 create policy "Allow anon read"
   on yjs_updates for select
@@ -47,3 +52,8 @@ create policy "Allow anon update"
   to anon
   using (true)
   with check (true);
+
+create policy "Allow anon delete"
+  on yjs_updates for delete
+  to anon
+  using (true);

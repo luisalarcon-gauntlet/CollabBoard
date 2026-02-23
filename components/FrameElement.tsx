@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import type { FrameLayer } from "@/lib/yjs-store";
-import { sharedLayers } from "@/lib/yjs-store";
+import { getSharedLayers } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./FrameElement.module.css";
 
@@ -13,6 +13,7 @@ const TITLE_HEIGHT = 28;
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 interface FrameElementProps {
+  boardId: string;
   id: string;
   layer: FrameLayer;
   selected: boolean;
@@ -27,6 +28,7 @@ interface FrameElementProps {
 export const FRAME_TITLE_HEIGHT = TITLE_HEIGHT;
 
 export function FrameElement({
+  boardId,
   id,
   layer,
   selected,
@@ -53,22 +55,26 @@ export function FrameElement({
 
   const updateFrame = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as FrameLayer | undefined;
       if (current?.type === "frame") {
         sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
       }
     },
-    [id],
+    [boardId, id],
   );
 
   const handleTitleChange = useCallback(
     (newTitle: string) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as FrameLayer | undefined;
       if (current?.type === "frame") {
         sharedLayers.set(id, { ...current, title: newTitle });
       }
     },
-    [id],
+    [boardId, id],
   );
 
   const handlePointerDown = useCallback(

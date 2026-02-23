@@ -6,9 +6,9 @@ import styles from "./page.module.css";
 export default async function Home() {
   const { userId } = await auth();
 
-  // If user is already authenticated, redirect to board
+  // If user is already authenticated, redirect to dashboard
   if (userId) {
-    redirect("/board");
+    redirect("/dashboard");
   }
 
   return (

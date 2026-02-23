@@ -3,7 +3,7 @@
 import { useCallback, useRef } from "react";
 import { RotateCw } from "lucide-react";
 import type { RectangleLayer } from "@/lib/yjs-store";
-import { sharedLayers, ydoc } from "@/lib/yjs-store";
+import { getSharedLayers, getYdoc } from "@/lib/yjs-store";
 import { cn } from "@/lib/utils";
 import styles from "./ShapeRectangle.module.css";
 
@@ -13,6 +13,7 @@ const MIN_HEIGHT = 60;
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
 interface ShapeRectangleProps {
+  boardId: string;
   id: string;
   layer: RectangleLayer;
   selected: boolean;
@@ -25,6 +26,7 @@ interface ShapeRectangleProps {
 }
 
 export function ShapeRectangle({
+  boardId,
   id,
   layer,
   selected,
@@ -50,12 +52,14 @@ export function ShapeRectangle({
 
   const updateSize = useCallback(
     (newX: number, newY: number, newWidth: number, newHeight: number) => {
+      const sharedLayers = getSharedLayers(boardId);
+      if (!sharedLayers) return;
       const current = sharedLayers.get(id) as RectangleLayer | undefined;
       if (current?.type === "rectangle") {
         sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
       }
     },
-    [id]
+    [boardId, id]
   );
 
   const handleResizePointerMove = useCallback(
@@ -193,14 +197,18 @@ export function ShapeRectangle({
       const cy = y + height / 2;
       const currentAngle = Math.atan2(world.y - cy, world.x - cx) * (180 / Math.PI);
       const newRotation = rotateStartRef.current.startRotation + (currentAngle - rotateStartRef.current.startAngle);
-      ydoc.transact(() => {
-        const current = sharedLayers.get(id) as RectangleLayer | undefined;
-        if (current?.type === "rectangle") {
-          sharedLayers.set(id, { ...current, rotation: newRotation });
-        }
-      });
+      const ydoc = getYdoc(boardId);
+      const sharedLayers = getSharedLayers(boardId);
+      if (ydoc && sharedLayers) {
+        ydoc.transact(() => {
+          const current = sharedLayers.get(id) as RectangleLayer | undefined;
+          if (current?.type === "rectangle") {
+            sharedLayers.set(id, { ...current, rotation: newRotation });
+          }
+        });
+      }
     },
-    [id, x, y, width, height, getScreenPos, screenToWorld]
+    [boardId, id, x, y, width, height, getScreenPos, screenToWorld]
   );
 
   const handleRotatePointerUp = useCallback(

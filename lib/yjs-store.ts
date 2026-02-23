@@ -4,11 +4,7 @@ import { SupabaseYjsProvider } from "./supabase-yjs-provider";
 import type { ConnectionStatus } from "./supabase-yjs-provider";
 import { supabase } from "./supabase";
 
-const ROOM_ID = "collab-board-main";
-
-// ----- Y.Doc & shared types (safe on server and client) -----
-export const ydoc = new Y.Doc();
-
+// ----- Shared types (safe on server and client) -----
 export type StickyLayer = {
   type: "sticky";
   x: number;
@@ -16,9 +12,9 @@ export type StickyLayer = {
   width?: number;
   height?: number;
   text: string;
-  fontSize?: number;  // font size for the note text (default: 14)
-  bgColor?: string;   // background color (default: #fffbeb)
-  rotation?: number;  // degrees, clockwise (default: 0)
+  fontSize?: number;
+  bgColor?: string;
+  rotation?: number;
 };
 
 export type RectangleLayer = {
@@ -28,7 +24,7 @@ export type RectangleLayer = {
   width: number;
   height: number;
   fill?: string;
-  rotation?: number;  // degrees, clockwise (default: 0)
+  rotation?: number;
 };
 
 export type CircleLayer = {
@@ -38,7 +34,7 @@ export type CircleLayer = {
   width: number;
   height: number;
   fill?: string;
-  rotation?: number;  // degrees, clockwise (default: 0)
+  rotation?: number;
 };
 
 export type TextLayer = {
@@ -53,9 +49,6 @@ export type TextLayer = {
   color: string;
 };
 
-/** Points are stored as absolute world-space coordinates [wx, wy][].
- *  x, y mirror the bounding-box top-left so consumers can position the SVG
- *  without iterating points on every render. */
 export type LineLayer = {
   type: "line";
   x: number;
@@ -66,28 +59,17 @@ export type LineLayer = {
   variant: "straight" | "arrow";
 };
 
-/**
- * Smart Connector — a managed edge between two named layers.
- * Endpoints are always recalculated from the source/target bounding boxes,
- * so the connector updates live when either object is moved or resized.
- */
 export type ConnectorLayer = {
   type: "connector";
-  /** ID of the source layer. */
   fromId: string;
-  /** ID of the target layer. */
   toId: string;
-  /** Optional text label rendered at the midpoint. */
   label?: string;
-  /** Visual routing style. */
   style: "straight" | "curved" | "elbow";
   stroke: {
     color: string;
     width: number;
-    /** SVG stroke-dasharray value, e.g. "6,3" (dashed) or "2,4" (dotted). Omit for solid. */
     dashArray?: string;
   };
-  /** Decoration applied to the target endpoint. */
   endpoints: "none" | "arrow" | "dot";
 };
 
@@ -110,45 +92,142 @@ export type LayerData =
   | ConnectorLayer
   | FrameLayer;
 
-/** The shared Y.Map that stores all whiteboard layers. */
-export const sharedLayers = ydoc.getMap<LayerData>("layers");
+// ----- Per-board state (client only) -----
+type BoardState = {
+  ydoc: Y.Doc;
+  provider: SupabaseYjsProvider;
+  sharedLayers: Y.Map<LayerData>;
+};
 
-// ----- Supabase provider & awareness: create only on the client -----
-let providerInstance: SupabaseYjsProvider | null = null;
+/**
+ * Module-level singleton — one entry per active board.
+ * Only ensurePersistence() adds entries; accessors are read-only.
+ */
+const boardStore = new Map<string, BoardState>();
 
-function getProvider(): SupabaseYjsProvider | null {
+/**
+ * Tracks boardIds whose providers are currently mid-destroy (i.e. the
+ * async saveToDb() is still running).  getOrCreateBoardState() will not
+ * spawn a new provider for these IDs until destroy() resolves, preventing
+ * duplicate providers during rapid unmount / remount (Bug §16.13).
+ */
+const pendingDestroys = new Set<string>();
+
+/**
+ * Internal — the only path that creates a new BoardState entry.
+ * Returns null if:
+ *   • called on the server (typeof window === "undefined"), or
+ *   • a destroy() is still in-flight for boardId (pendingDestroys guard).
+ */
+function getOrCreateBoardState(boardId: string): BoardState | null {
   if (typeof window === "undefined") return null;
-  if (!providerInstance) {
-    providerInstance = new SupabaseYjsProvider(ydoc, supabase, {
-      roomId: ROOM_ID,
+
+  // Block creation while the previous provider for this boardId is still
+  // completing its async final DB save. Prevents a duplicate active provider.
+  if (pendingDestroys.has(boardId)) return null;
+
+  let state = boardStore.get(boardId);
+  if (!state) {
+    const ydoc = new Y.Doc();
+    const sharedLayers = ydoc.getMap<LayerData>("layers");
+    const provider = new SupabaseYjsProvider(ydoc, supabase, {
+      roomId: boardId,
       tableName: "yjs_updates",
       columnName: "content",
       roomColumn: "room_id",
       saveInterval: 5_000,
     });
+    state = { ydoc, provider, sharedLayers };
+    boardStore.set(boardId, state);
   }
-  return providerInstance;
+  return state;
 }
 
-/** Returns awareness only on the client; null during SSR/build. */
-export function getAwareness(): Awareness | null {
-  return getProvider()?.awareness ?? null;
-}
-
-/** Call when the board is mounted so persistence (load/save) starts immediately. */
-export function ensurePersistence(): void {
-  getProvider();
-}
+// ─── Public initialisation ───────────────────────────────────────────────────
 
 /**
- * Register a callback that fires whenever the Realtime connection status changes.
- * Pass `null` to unregister. Safe to call from a React effect — the provider
- * stores only the latest reference so there are no memory leaks or stale closures.
+ * Call when mounting a board route.  This is the ONLY function that triggers
+ * provider creation; all other accessors below are strictly read-only.
+ *
+ * Moving creation responsibility here (rather than inside getSharedLayers)
+ * eliminates the "stale-closure silent re-init" bug: a shape-component
+ * handler that captured an old boardId can no longer accidentally resurrect
+ * a destroyed provider.
  */
+export function ensurePersistence(boardId: string): void {
+  if (typeof window === "undefined") return;
+  getOrCreateBoardState(boardId);
+}
+
+// ─── Lifecycle ───────────────────────────────────────────────────────────────
+
+/**
+ * Destroy the provider and remove board state (call when leaving a board).
+ *
+ * Fix for Bug §16.13 — the previous implementation called boardStore.delete()
+ * and then awaited provider.destroy() with nothing in between.  Any call to
+ * getOrCreateBoardState() inside that async window would find no entry in the
+ * map and spawn a second live provider for the same boardId.
+ *
+ * The fix adds boardId to pendingDestroys immediately after removing it from
+ * the map.  getOrCreateBoardState() treats a pending-destroy boardId as
+ * "not available" and returns null instead of creating a duplicate.
+ */
+export async function destroyProvider(boardId: string): Promise<void> {
+  const state = boardStore.get(boardId);
+  if (!state) return;
+
+  // Remove from the live map first so all read-only accessors immediately
+  // return null — important for the stale-closure safety guarantee.
+  boardStore.delete(boardId);
+
+  // Guard the async window: block getOrCreateBoardState() until the final
+  // DB save completes so no duplicate provider can be spawned.
+  pendingDestroys.add(boardId);
+  try {
+    await state.provider.destroy();
+  } finally {
+    pendingDestroys.delete(boardId);
+  }
+}
+
+// ─── Read-only accessors ─────────────────────────────────────────────────────
+//
+// These functions NEVER call getOrCreateBoardState().  They read directly from
+// boardStore and return null if the board has not been initialised (via
+// ensurePersistence) or has already been destroyed.
+//
+// This is the key safeguard against the stale-closure bug: a shape component
+// (FrameElement, StickyNote, …) that captured boardId in an event-handler
+// closure and fires after the user navigated to a different board will get
+// null back rather than a freshly-leaked provider with no owner.
+
+export function getSharedLayers(boardId: string | null): Y.Map<LayerData> | null {
+  if (!boardId || typeof window === "undefined") return null;
+  return boardStore.get(boardId)?.sharedLayers ?? null;
+}
+
+export function getYdoc(boardId: string | null): Y.Doc | null {
+  if (!boardId || typeof window === "undefined") return null;
+  return boardStore.get(boardId)?.ydoc ?? null;
+}
+
+export function getProvider(boardId: string | null): SupabaseYjsProvider | null {
+  if (!boardId || typeof window === "undefined") return null;
+  return boardStore.get(boardId)?.provider ?? null;
+}
+
+export function getAwareness(boardId: string | null): Awareness | null {
+  if (!boardId || typeof window === "undefined") return null;
+  return boardStore.get(boardId)?.provider.awareness ?? null;
+}
+
 export function setConnectionStatusCallback(
+  boardId: string | null,
   cb: ((status: ConnectionStatus) => void) | null
 ): void {
-  getProvider()?.setStatusCallback(cb ?? null);
+  if (!boardId || typeof window === "undefined") return;
+  boardStore.get(boardId)?.provider.setStatusCallback(cb ?? null);
 }
 
 export type { ConnectionStatus };

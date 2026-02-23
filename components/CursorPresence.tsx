@@ -4,8 +4,8 @@ import { useAwareness } from "@/lib/useAwareness";
 import { useBoardTransform } from "@/lib/board-transform";
 import styles from "./CursorPresence.module.css";
 
-export function CursorPresence() {
-  const users = useAwareness();
+export function CursorPresence({ boardId }: { boardId: string }) {
+  const users = useAwareness(boardId);
   const { worldToScreen } = useBoardTransform();
 
   return (

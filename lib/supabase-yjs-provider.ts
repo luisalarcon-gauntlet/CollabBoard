@@ -14,7 +14,7 @@ import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 export type ConnectionStatus = "connected" | "disconnected";
 
 export interface SupabaseYjsProviderOptions {
-  /** Room / channel identifier */
+  /** Room / channel identifier (use boardId for multi-board; must match yjs_updates.room_id and Realtime channel) */
   roomId: string;
   /** Supabase table storing doc snapshots */
   tableName?: string;
@@ -38,6 +38,8 @@ const DEFAULT_OPTS: Required<Omit<SupabaseYjsProviderOptions, "roomId" | "onStat
 export class SupabaseYjsProvider {
   readonly doc: Y.Doc;
   readonly awareness: Awareness;
+  /** Resolves once the initial DB state has been loaded (or failed). */
+  readonly loaded: Promise<void>;
 
   private supabase: SupabaseClient;
   private opts: Required<Omit<SupabaseYjsProviderOptions, "onStatusChange">>;
@@ -45,8 +47,8 @@ export class SupabaseYjsProvider {
   private saveTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  private destroying = false;
   private statusCallback: ((status: ConnectionStatus) => void) | null = null;
-  /** Tracks the most-recent status so late-registering callbacks get the current state. */
   private lastStatus: ConnectionStatus = "connected";
 
   constructor(
@@ -54,6 +56,14 @@ export class SupabaseYjsProvider {
     supabase: SupabaseClient,
     options: SupabaseYjsProviderOptions
   ) {
+    if (!options.roomId || typeof options.roomId !== "string") {
+      throw new Error(
+        `[SupabaseYjsProvider] roomId must be a non-empty string. ` +
+        `Received: ${JSON.stringify(options.roomId)}. ` +
+        `Pass the dynamic boardId (e.g. the UUID from the route params).`
+      );
+    }
+
     this.doc = doc;
     this.supabase = supabase;
     const { onStatusChange, ...rest } = options;
@@ -62,7 +72,7 @@ export class SupabaseYjsProvider {
 
     this.awareness = new Awareness(doc);
 
-    this.init();
+    this.loaded = this.init();
   }
 
   /**
@@ -89,7 +99,7 @@ export class SupabaseYjsProvider {
   /*  Initialisation                                                     */
   /* ------------------------------------------------------------------ */
 
-  private async init() {
+  private async init(): Promise<void> {
     await this.loadFromDb();
     this.setupChannel();
     this.setupDocListener();
@@ -265,7 +275,7 @@ export class SupabaseYjsProvider {
   /* ------------------------------------------------------------------ */
 
   private handleUnload = () => {
-    this.destroy();
+    void this.destroy();
   };
 
   /**
@@ -277,17 +287,33 @@ export class SupabaseYjsProvider {
     this.emitStatus("disconnected");
   };
 
+  /**
+   * When the browser comes back online, tear down the stale channel and open a
+   * fresh subscription so updates resume. The subscribe callback will emit
+   * "connected" once the new channel is established.
+   */
   private handleOnline = () => {
-    this.emitStatus("connected");
+    if (this.destroyed) return;
+    if (this.channel) {
+      this.channel.unsubscribe();
+      this.channel = null;
+    }
+    this.setupChannel();
   };
 
-  destroy() {
-    if (this.destroyed) return;
-    this.destroyed = true;
+  async destroy(): Promise<void> {
+    if (this.destroyed || this.destroying) return;
+    this.destroying = true;
 
     if (this.saveTimer) clearInterval(this.saveTimer);
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
-    this.saveToDb();
+
+    // saveToDb checks this.destroyed; perform the final save before marking
+    // destroyed so the guard doesn't short-circuit the last persistence write.
+    await this.saveToDb();
+
+    this.destroyed = true;
+    this.destroying = false;
 
     if (typeof window !== "undefined") {
       window.removeEventListener("beforeunload", this.handleUnload);

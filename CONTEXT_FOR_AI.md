@@ -1,134 +1,134 @@
-# CollabBoard — Full Project Context for AI
+# CollabBoard — Comprehensive AI Context for Bug Analysis
 
-> This document is written for an LLM to give it complete, up-to-date context about the CollabBoard project — its purpose, architecture, technology stack, every feature implemented, and a candid assessment of what should be worked on next.
+> **Purpose of this document:** Give another LLM full, precise context about the CollabBoard codebase so it can reason about potential bugs, race conditions, edge cases, and correctness issues. Every architectural decision, implementation detail, and known fragility is documented here. Read this before analyzing any file in the repo.
 >
-> **Last updated:** Feb 2026 — reflects Frames, connector-to-frame support, the full AI Board Agent feature, shape rotation, graceful disconnect/reconnect UI, and 30 FPS cursor-awareness throttle with Vitest test suite (7 tests).
+> **Last updated:** Feb 2026
 
 ---
 
 ## 1. What Is CollabBoard?
 
-CollabBoard is a **real-time collaborative whiteboard web application** — think Miro or FigJam, but self-hosted and built from scratch. Multiple users can join the same board simultaneously and see each other's cursors, create sticky notes, draw shapes, add text, draw lines/arrows, connect shapes with smart connectors, organize content in **Frames**, pan/zoom the infinite canvas, and have all changes persist across sessions.
+CollabBoard is a **real-time collaborative whiteboard** (think Miro/FigJam, self-hosted). Multiple users join the same board, see each other's cursors, create/edit shapes, and have all changes persist. Sync is powered by **Yjs CRDT** over **Supabase Realtime** with no third-party collaboration backend.
 
-The core goal is bulletproof multiplayer sync without any third-party sync service (no Liveblocks, no PartyKit) — everything is self-hosted using Yjs + Supabase. The project targets an enterprise use case (authenticated users only, with Supabase Row Level Security).
+**Live URL pattern:** `/board/[id]` where `id` is a UUID.
 
 ---
 
 ## 2. Technology Stack
 
-| Layer | Technology | Why |
+| Layer | Technology | Version |
 |---|---|---|
-| Framework | **Next.js 16** (App Router) | Full-stack React, server components, routing |
-| UI | **React 19** | Component model |
-| Styling | **CSS Modules** + **Tailwind CSS** (via shadcn/ui) | Per-component isolation + utility classes |
-| CRDT / Sync | **Yjs** (`yjs`, `y-protocols`) | Conflict-free replicated data types for collaboration |
-| Realtime Transport | **Supabase Realtime** (broadcast channels) | WebSocket-based message passing |
-| Persistence | **Supabase Postgres** (`yjs_updates` table) | Board state survives refreshes and server restarts |
-| Authentication | **Clerk** (`@clerk/nextjs`) | Auth UI, session management, JWT |
-| Icons | **lucide-react** | Icon library |
-| Type Safety | **TypeScript 5** (strict mode) | End-to-end types |
-| Component Primitives | **shadcn/ui** (New York style) | Accessible component library, not heavily used yet |
-| AI SDK | **@anthropic-ai/sdk** (`^0.78.0`) | Claude tool-calling for the AI Board Agent |
-
-**Key design decision:** There is NO third-party collaboration backend. Everything runs on Supabase infrastructure. The Yjs provider is custom-built (`lib/supabase-yjs-provider.ts`).
+| Framework | Next.js (App Router) | 16.1.6 |
+| UI | React | 19.2.3 |
+| Styling | CSS Modules | — |
+| CRDT / Sync | Yjs | ^13.6.29 |
+| Realtime Transport | Supabase Realtime (broadcast) | ^2.95.3 |
+| Persistence | Supabase Postgres (`yjs_updates` table) | — |
+| Authentication | Clerk (`@clerk/nextjs`) | ^6.37.4 |
+| AI SDK | @anthropic-ai/sdk | ^0.78.0 |
+| Testing | Vitest (unit) + Playwright (E2E) | — |
 
 ---
 
-## 3. Project File Structure
+## 3. Complete File Structure
 
 ```
 CollabBoard/
 ├── app/
-│   ├── layout.tsx                # Root layout — ClerkProvider, Geist fonts
-│   ├── page.tsx                  # Landing page — auth gate, redirects to /board if signed in
-│   ├── globals.css               # Global CSS variables and resets
+│   ├── layout.tsx                    # Root layout — ClerkProvider, Geist fonts
+│   ├── page.tsx                      # Landing page — auth gate, redirects to /dashboard
+│   ├── globals.css
 │   ├── page.module.css
 │   ├── board/
-│   │   ├── page.tsx              # Main board page — renders <Whiteboard />, <AIChat />, Sign Out button
-│   │   └── page.module.css
+│   │   ├── page.tsx                  # /board redirects to /dashboard
+│   │   ├── page.module.css
+│   │   └── [id]/
+│   │       ├── page.tsx              # Main board page — renders <Whiteboard boardId={id}> + <AIChat>
+│   │       └── page.module.css
+│   ├── dashboard/
+│   │   ├── page.tsx                  # Lists user's boards
+│   │   ├── page.module.css
+│   │   ├── actions.ts                # Server Actions: createBoard, deleteBoard
+│   │   ├── BoardCard.tsx             # Board card component with delete
+│   │   ├── CreateBoardButton.tsx     # Dialog to create a new board
+│   │   └── __tests__/
+│   │       ├── BoardCard.test.tsx
+│   │       └── CreateBoardButton.test.tsx
 │   └── api/
 │       └── ai/
-│           └── route.ts          # ★ AI Agent API — model routing, prompt caching, 6-tool schema
+│           └── route.ts              # POST /api/ai — SSE streaming, tool-call schema, model routing
 │
 ├── components/
-│   ├── Whiteboard.tsx            # ★ Core component — canvas, toolbar, pan/zoom, layer rendering
+│   ├── Whiteboard.tsx                # ★ Core canvas — 1532 lines — all pointer events, toolbar, layer render
 │   ├── Whiteboard.module.css
-│   ├── FrameElement.tsx          # ★ Frame — large organizational container with title, draggable border, resize
-│   ├── FrameElement.module.css
-│   ├── StickyNote.tsx            # Sticky note — drag, resize, inline text edit, font size, bg color
-│   ├── StickyNote.module.css
-│   ├── ShapeRectangle.tsx        # Rectangle shape — drag, resize, fill color
-│   ├── ShapeRectangle.module.css
-│   ├── ShapeCircle.tsx           # Circle/ellipse shape — drag, resize, fill color
-│   ├── ConnectorElement.tsx      # ★ Smart connector — edge-to-edge routing between two named layers
-│   ├── ConnectorElement.module.css
-│   ├── TextElement.tsx           # Standalone text — drag, resize, inline editing, font size, color
-│   ├── LineElement.tsx           # Line/arrow — endpoint drag, multi-point, stroke color
-│   ├── HelpModal.tsx             # Keyboard shortcut reference modal (? key)
-│   ├── Avatars.tsx               # Shows avatars/initials of connected users (top-left)
-│   ├── CursorPresence.tsx        # Renders remote user cursors with name labels
-│   ├── AIChat.tsx                # ★ Floating AI Board Agent chat panel (FAB + collapsible)
-│   └── AIChat.module.css
+│   ├── FrameElement.tsx              # Frame — drag/resize via edge strips, title editing
+│   ├── ConnectorElement.tsx          # Smart SVG connector — edge-to-edge routing (straight/curved/elbow)
+│   ├── StickyNote.tsx                # Sticky note — drag, resize, inline edit, rotation
+│   ├── ShapeRectangle.tsx            # Rectangle — drag, resize, fill, rotation
+│   ├── ShapeCircle.tsx               # Circle — drag, resize, fill, rotation
+│   ├── TextElement.tsx               # Text — drag, resize, inline edit, font
+│   ├── LineElement.tsx               # Line/arrow — SVG, endpoint drag
+│   ├── AIChat.tsx                    # Floating AI chat UI — SSE consumer, tool executor
+│   ├── Avatars.tsx                   # Connected user avatars (top-left)
+│   ├── CursorPresence.tsx            # Remote cursor SVG overlays
+│   ├── HelpModal.tsx                 # Keyboard shortcut reference
+│   └── __tests__/
+│       ├── WhiteboardAddShapes.test.tsx
+│       ├── WhiteboardConnectors.test.tsx
+│       ├── WhiteboardFrames.test.tsx
+│       └── WhiteboardMovement.test.tsx
 │
 ├── lib/
-│   ├── supabase.ts               # Supabase client singleton
-│   ├── supabase-yjs-provider.ts  # ★ Custom Yjs provider — Supabase Realtime + Postgres
-│   ├── yjs-store.ts              # Y.Doc singleton, sharedLayers Y.Map, all layer type definitions
-│   ├── useYjsStore.ts            # React hook — subscribes to Yjs layers map
-│   ├── useAwareness.ts           # React hook — returns remote users + cursor positions
-│   ├── board-transform.tsx       # React context for pan/zoom, tool mode, coordinate conversion
-│   ├── utils.ts                  # cn() class-name helper + getElementsInFrame() geometry utility
-│   ├── throttle.ts               # ★ Pure leading+trailing-edge throttle utility (used for cursor awareness)
-│   └── ai-executor.ts            # ★ Executes AI tool calls atomically on the Yjs doc
+│   ├── supabase.ts                   # Supabase anon client singleton
+│   ├── yjs-store.ts                  # Y.Doc + layer type defs + per-board boardStore Map
+│   ├── useYjsStore.ts                # React hook — subscribes to Y.Map
+│   ├── useAwareness.ts               # React hook — returns remote users array
+│   ├── supabase-yjs-provider.ts      # Custom Yjs provider (360 lines) — Realtime + Postgres
+│   ├── board-transform.tsx           # React context — pan/zoom/tool mode + coordinate conversion
+│   ├── utils.ts                      # cn(), isValidUUID(), getElementsInFrame()
+│   ├── throttle.ts                   # throttleTrailing() — leading+trailing cursor throttle
+│   ├── ai-executor.ts                # Executes AI tool calls atomically on Y.Doc
+│   └── __tests__/
+│       ├── setup.ts
+│       ├── actions.test.ts
+│       ├── connection-status.test.ts
+│       ├── reconnect.test.ts
+│       ├── supabase-yjs-provider.test.ts
+│       ├── useYjsStore.test.ts
+│       ├── utils.test.ts
+│       └── yjs-store.test.ts
 │
 ├── supabase/
-│   └── schema.sql                # DB schema: yjs_updates table, RLS policies, Realtime pub
+│   ├── schema.sql                    # yjs_updates table + RLS
+│   └── migrations/
+│       └── multi_board_setup.sql     # boards table + RLS
 │
-├── proxy.ts                      # Next.js middleware — Clerk auth protection
+├── e2e/
+│   ├── auth-flow.spec.ts
+│   ├── board-smoke.spec.ts
+│   ├── board.spec.ts
+│   └── landing.spec.ts
+│
+├── proxy.ts                          # Next.js middleware — Clerk auth on all routes
 ├── package.json
 ├── tsconfig.json
-├── vitest.config.ts              # Vitest test runner (environment: jsdom)
-├── next.config.ts
-├── eslint.config.mjs
-├── components.json               # shadcn/ui config
-├── PROJECT.md                    # Dev principles
-├── README.md                     # User-facing project README
-├── CONTEXT_FOR_AI.md             # ← this file
-└── DEPLOY.md                     # Deployment guide (Vercel + Supabase)
+├── next.config.ts                    # yjs/lib0 webpack aliases
+├── vitest.config.ts                  # jsdom environment
+└── playwright.config.ts
 ```
 
 ---
 
-## 4. Architecture Deep Dive
+## 4. Data Model — Yjs Layer Types
 
-### 4.1 Authentication Flow (Clerk)
-
-1. User visits `/` — server component checks auth via Clerk
-2. Unauthenticated → landing page with **Sign In** / **Sign Up** (Clerk hosted UI)
-3. Authenticated → redirected to `/board`
-4. `proxy.ts` (Next.js middleware) enforces auth on all routes except `/`, `/sign-in/*`, `/sign-up/*`
-5. Board page shows a **Sign Out** button (top-right)
-
-**Required env vars:** `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`
-
-### 4.2 State Management — Yjs CRDT
-
-All board state lives in a **single `Y.Doc`**. It contains one shared structure:
-
-```typescript
-// lib/yjs-store.ts
-const ydoc = new Y.Doc();
-const sharedLayers = ydoc.getMap<LayerData>("layers");
-```
-
-`sharedLayers` is a `Y.Map` where keys are unique layer IDs (e.g., `"sticky-1708123456789-abc123"`) and values are typed layer objects. The complete union of all layer types is:
+All board state lives in a single `Y.Doc` per board, with one `Y.Map<LayerData>` named `"layers"`. Keys are string IDs like `"sticky-1708123456789-abc123"`. This is defined in `lib/yjs-store.ts`.
 
 ```typescript
 type StickyLayer = {
   type: "sticky";
   x: number; y: number;
-  width?: number;    // default 200
-  height?: number;   // default 150
+  width?: number;    // default 200 — NOTE: optional field
+  height?: number;   // default 150 — NOTE: optional field
   text: string;
   fontSize?: number;  // default 14
   bgColor?: string;   // default "#fffbeb"
@@ -138,743 +138,1049 @@ type StickyLayer = {
 type RectangleLayer = {
   type: "rectangle";
   x: number; y: number;
-  width: number; height: number;  // default 120×120
+  width: number; height: number;  // required
   fill?: string;      // default "#93c5fd"
-  rotation?: number;  // degrees clockwise; default 0
+  rotation?: number;
 };
 
 type CircleLayer = {
   type: "circle";
   x: number; y: number;
-  width: number; height: number;  // default 120×120
+  width: number; height: number;  // required
   fill?: string;      // default "#86efac"
-  rotation?: number;  // degrees clockwise; default 0
+  rotation?: number;
 };
 
 type TextLayer = {
   type: "text";
   x: number; y: number;
-  width: number; height: number;  // default 200×40
+  width: number; height: number;  // required
   text: string;
-  fontSize: number;   // default 16
-  fontWeight: string; // "normal" | "bold"
-  color: string;      // default "#1e293b"
+  fontSize: number;   // required
+  fontWeight: string; // "normal" | "bold" — required
+  color: string;      // required
 };
 
 type LineLayer = {
   type: "line";
   x: number; y: number;  // bounding-box top-left (mirrors points)
-  points: [number, number][];  // absolute world-space coords
-  color: string;      // default "#1e293b"
-  thickness: number;  // default 2
-  variant: "straight" | "arrow";
+  points: [number, number][];  // absolute world-space coords — minimum 2 points
+  color: string;      // required
+  thickness: number;  // required
+  variant: "straight" | "arrow";  // required
 };
 
-// Smart connector — no x/y; geometry is always derived from fromId/toId bboxes.
-// fromId/toId can reference ANY layer type including FrameLayer.
+// ConnectorLayer has NO x/y — geometry derived from fromId/toId at render time
 type ConnectorLayer = {
   type: "connector";
-  fromId: string;   // ID of source layer (any type except connector)
-  toId: string;     // ID of target layer (any type except connector)
-  label?: string;   // optional midpoint label
+  fromId: string;   // ID of source layer (any non-connector type)
+  toId: string;     // ID of target layer (any non-connector type)
+  label?: string;   // optional midpoint label (no edit UI yet)
   style: "straight" | "curved" | "elbow";
   stroke: {
     color: string;
     width: number;
-    dashArray?: string;  // SVG stroke-dasharray, e.g. "6,3" (dashed), "2,4" (dotted)
+    dashArray?: string;  // SVG stroke-dasharray, e.g. "6,3"
   };
   endpoints: "none" | "arrow" | "dot";
 };
 
-// Organizational container — groups elements geometrically.
-// Children are NOT stored inside FrameLayer; containment is determined at
-// runtime via bounding-box geometry in getElementsInFrame().
 type FrameLayer = {
   type: "frame";
   x: number; y: number;
-  width: number; height: number;  // default 600×400
-  title: string;                  // editable label (double-click the title bar)
-  backgroundColor: string;        // default "rgba(241, 245, 249, 0.7)"
+  width: number; height: number;  // required
+  title: string;
+  backgroundColor: string;
 };
 
-type LayerData =
-  | StickyLayer | RectangleLayer | CircleLayer
-  | TextLayer | LineLayer | ConnectorLayer | FrameLayer;
+type LayerData = StickyLayer | RectangleLayer | CircleLayer | TextLayer | LineLayer | ConnectorLayer | FrameLayer;
 ```
 
-**Important:** `ConnectorLayer` intentionally has **no `x` or `y`** fields — its geometry is always recomputed from the live bounding boxes of `fromId` / `toId`, so it never goes stale when objects are moved or resized.
+**Key architectural constraints:**
+- `ConnectorLayer` has no position fields — geometry always recomputed from `fromId`/`toId` live bounding boxes
+- `FrameLayer` children are NOT stored in the frame — containment computed via `getElementsInFrame()` bounding-box geometry at runtime
+- `StickyLayer.width` and `StickyLayer.height` are optional (`?`) — code must handle undefined with fallbacks
 
-**Important:** `FrameLayer` children are **not stored inside the frame object**. Containment is computed dynamically at drag-start / deletion time by `getElementsInFrame()` using bounding-box intersection. This means a child can visually "leave" a frame just by being dragged out, with zero schema migration.
+---
 
-All mutations are wrapped in `ydoc.transact()` to produce a single undo step and avoid double-writes.
+## 5. State Management Architecture
 
-### 4.3 Custom Supabase Yjs Provider (`lib/supabase-yjs-provider.ts`)
-
-The most complex piece of the system. Replaces standard Yjs providers (y-websocket, y-webrtc).
-
-**A) Realtime sync (broadcast):**
-- Subscribes to a Supabase Realtime broadcast channel named after the `roomId`
-- Event types: `yjs-update` (doc deltas, base64-encoded binary) and `yjs-awareness` (presence)
-- Local changes → broadcast delta to all peers
-- Remote updates → `Y.applyUpdate()` on the local doc
-
-**B) Persistence (Postgres):**
-- On init: loads saved state from `yjs_updates` table, applies to local doc
-- Auto-saves every **5 seconds** if doc changed
-- Debounce-saves **1 second** after last local change
-- Saves on `window.beforeunload`
-- State serialized via `Y.encodeStateAsUpdate()`, base64-encoded to TEXT in Postgres
-
-**C) Connection status tracking:**
-- Exports `ConnectionStatus = "connected" | "disconnected"` type
-- `setStatusCallback(cb)` — registers or replaces the React callback; **immediately replays** `lastStatus` to the caller so late-mounting components are always in sync (fixes the singleton/mount-order race condition)
-- `emitStatus(status)` — private helper that stores `lastStatus` and notifies the current callback in one place
-- `window "offline"` / `window "online"` event listeners fire `emitStatus` immediately — this is the reliable path for DevTools Network throttling (the WebSocket close is too slow for that signal)
-- `channel.subscribe(status => ...)` also calls `emitStatus` for: `SUBSCRIBED` → connected, `CLOSED` / `CHANNEL_ERROR` / `TIMED_OUT` → disconnected
-- Listeners are cleaned up in `destroy()`
-
-`lib/yjs-store.ts` exposes `setConnectionStatusCallback(cb)` as the public entry point for React. `Whiteboard.tsx` registers a `useCallback`-stabilised handler in a `useEffect` (cleaned up on unmount) to drive a `connectionStatus` React state that shows/hides the reconnecting badge.
-
-**Required env vars:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-
-### 4.4 User Awareness & Presence
-
-Yjs awareness protocol (`y-protocols/awareness`) is used for ephemeral state:
-- **Who is connected** — name, avatar URL (from Clerk)
-- **Cursor position** — `{ x, y }` in world coordinates
-
-Flow:
-1. On mount, local awareness state is set from Clerk user info
-2. On `pointermove` → cursor world position written to awareness **at ~30 FPS** (throttled, see below)
-3. On `pointerleave` → cursor set to `null` **immediately** (bypasses throttle)
-4. `useAwareness.ts` hook subscribes to changes, returns remote users array
-5. `CursorPresence.tsx` renders cursor SVG + name label per remote user
-6. `Avatars.tsx` renders avatar images or initials per connected user
-
-Awareness is broadcast on the same Supabase Realtime channel as doc updates (different event type).
-
-**Cursor awareness throttle (`lib/throttle.ts` + `Whiteboard.tsx`):**
-
-Only the Yjs awareness write is throttled — not the full pointer handler. Canvas pan, marquee, and shape dragging still run at the full pointer-event rate (≥ 60 FPS). The throttle operates as follows:
-
-- **Leading edge:** the very first call within a quiet period fires immediately (≤ 1 frame latency on first move).
-- **Trailing edge (33 ms window):** all subsequent calls within the window are suppressed, but the last coordinates are remembered and sent once as a trailing call. This ensures the final resting cursor position always reaches remote peers.
-- **Stale-closure prevention:** a `throttleTrailing()` instance is created once inside a `useEffect` and stored in `cursorThrottleRef` (a `useRef`). The callback reads `getAwareness()` at call time — not at creation time — so it always uses the live provider. React re-renders never recreate or reset the throttle timer.
-- **`pointerleave` bypass:** the leave handler calls `cursorThrottleRef.current.cancel()` first (clearing any pending trailing send), then immediately writes `cursor: null` directly. Remote cursors therefore disappear without delay and no stale position is sent afterwards.
+### 5.1 Per-Board Singleton Store (`lib/yjs-store.ts`)
 
 ```typescript
-// lib/throttle.ts — public API
-throttleTrailing<T extends (...args: never[]) => void>(fn: T, delay: number)
-  → { fn: T; cancel: () => void }
+// Module-level singleton Map — lives for the entire browser session
+const boardStore = new Map<string, {
+  ydoc: Y.Doc;
+  provider: SupabaseYjsProvider;
+  sharedLayers: Y.Map<LayerData>;
+}>();
 ```
 
-Four Vitest unit tests cover this behaviour: unthrottled pan callbacks, suppression within the window, trailing-edge final coordinates, and the pointerleave cancel+null path.
+`getOrCreateBoardState(boardId)` creates a new entry if missing. Entry is destroyed via `destroyProvider(boardId)` in `Whiteboard.tsx`'s `useEffect` cleanup.
 
-### 4.5 Pan/Zoom & Tool Mode System (`lib/board-transform.tsx`)
+**Critical:** `boardStore` persists across React unmount/remount cycles. If React StrictMode double-invokes the `useEffect`, `destroyProvider` runs, then `getOrCreateBoardState` creates a fresh provider on re-mount. The old provider's final save runs async in the background.
 
-Infinite canvas with world-space coordinates:
+### 5.2 React Integration (`lib/useYjsStore.ts`)
+
+```typescript
+export function useYjsStore(boardId): Map<string, LayerData> {
+  const [snapshot, setSnapshot] = useState(() => new Map());
+  const refresh = useCallback(() => {
+    setSnapshot(layers ? new Map(layers.entries()) : new Map());
+  }, [boardId]);
+
+  useEffect(() => {
+    layers.observe(refresh);           // fires on every Y.Map change
+    refresh();                          // initial snapshot
+    provider.loaded.then(() => refresh()); // second refresh after DB load resolves
+    return () => layers.unobserve(refresh);
+  }, [boardId, refresh]);
+}
+```
+
+On mount, `setSnapshot` is called **twice** — once immediately, once after `provider.loaded` resolves. This causes two React renders on mount but ensures DB-loaded data is captured.
+
+### 5.3 Coordinate System
 
 ```typescript
 screenToWorld(sx, sy) => { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom }
 worldToScreen(wx, wy) => { x: wx * zoom + pan.x,    y: wy * zoom + pan.y }
 ```
 
-A `transformRef` is kept in sync with current pan/zoom for use inside pointer event handlers (avoids stale closure issues).
+`pan` and `zoom` are React state in `BoardTransformProvider`. A `transformRef` keeps a current snapshot for use inside pointer event handlers (avoids stale closure). Layers are positioned in world space; the `worldTransform` div applies `transform: translate(${pan.x}px, ${pan.y}px) scale(${zoom})`.
 
-**Tool Mode** is part of `BoardTransformContext`:
+**Important:** Zoom bounds are `MIN_ZOOM = 0.01`, `MAX_ZOOM = 100`. The `setZoom` function in `BoardTransformProvider` clamps the value. However, `handleWheel` in `Whiteboard.tsx` computes the new pan offset using the **unclamped** `newZoom` value — see Section 9 (Bugs).
+
+---
+
+## 6. Custom Supabase Yjs Provider (`lib/supabase-yjs-provider.ts`)
+
+The most complex file. 360 lines. Replaces y-websocket/y-webrtc.
+
+### 6.1 Lifecycle
+
+```
+constructor()
+  → init() [async]
+      → loadFromDb()         # SELECT from yjs_updates, Y.applyUpdate
+      → setupChannel()       # subscribe to Supabase Realtime broadcast
+      → setupDocListener()   # ydoc.on("update") → broadcastUpdate + debounced save
+      → setupAwarenessListener()  # awareness.on("update") → broadcastAwareness
+      → saveTimer = setInterval(saveToDb, 5000)
+      → window.addEventListener("beforeunload", handleUnload)
+      → window.addEventListener("offline", handleOffline)
+      → window.addEventListener("online", handleOnline)
+```
+
+### 6.2 Persistence
+
+- **Load:** `Y.applyUpdate(doc, bytes)` on init. If no row exists, board starts empty.
+- **Save (debounced):** After any local doc change, saves within 1 second (clears/resets timer).
+- **Save (interval):** Every 5 seconds if not destroyed.
+- **Save (beforeunload):** `void this.destroy()` — but `destroy()` is async, so the save may not complete before the page unloads.
+- **Format:** `Y.encodeStateAsUpdate()` → base64 TEXT in Postgres `content` column.
+- **Upsert:** `{ onConflict: roomColumn }` — single row per `room_id`.
+
+### 6.3 Realtime Broadcast
+
+```typescript
+channel = supabase.channel(`yjs-${roomId}`, { config: { broadcast: { self: false } } })
+  .on("broadcast", { event: "yjs-update" },    (payload) => Y.applyUpdate(doc, decode(payload.update), "remote"))
+  .on("broadcast", { event: "yjs-awareness" }, (payload) => applyAwarenessUpdate(awareness, decode(payload.update), "remote"))
+  .subscribe((status) => emitStatus(status === "SUBSCRIBED" ? "connected" : "disconnected"))
+```
+
+`self: false` means local changes are not echoed back.
+
+### 6.4 Connection Status
+
+```typescript
+private lastStatus: ConnectionStatus = "connected";  // initialized BEFORE any real connection
+
+setStatusCallback(cb) {
+  this.statusCallback = cb;
+  if (cb) cb(this.lastStatus);  // immediately replays last known status
+}
+```
+
+**Critical:** `lastStatus` defaults to `"connected"` at construction, before the Realtime channel has subscribed. Any React component that registers its callback before `SUBSCRIBED` fires will immediately receive `"connected"` even if the connection is still being established. The reconnect badge will not show during initial connection failures until the channel emits a status event.
+
+### 6.5 Reconnection
+
+When `window.online` fires (`handleOnline`):
+1. Unsubscribes old channel
+2. Calls `setupChannel()` to create a fresh subscription
+3. Does NOT immediately emit "connected" — waits for `SUBSCRIBED` callback
+
+This means the UI remains "disconnected" during the reconnection handshake, which is correct behavior.
+
+### 6.6 `destroy()` Pattern
+
+```typescript
+async destroy(): Promise<void> {
+  if (this.destroyed || this.destroying) return;
+  this.destroying = true;
+  clearInterval(this.saveTimer);
+  clearTimeout(this.debounceTimer);
+  await this.saveToDb();   // final save — awaited
+  this.destroyed = true;
+  window.removeEventListener(...);
+  channel.unsubscribe();
+  awareness.destroy();
+}
+```
+
+`destroy()` is called from `Whiteboard.tsx`'s `useEffect` cleanup: `return () => { void destroyProvider(boardId); }`. The `void` discards the Promise. **The `await this.saveToDb()` inside destroy may not complete if the browser is closing or the component unmounts during a rapid navigation** — there's no mechanism to ensure the async save finishes before cleanup.
+
+---
+
+## 7. Whiteboard Component (`components/Whiteboard.tsx`, 1532 lines)
+
+### 7.1 Component Structure
+
+```
+Whiteboard (props validator)
+  └── BoardTransformProvider
+        └── WhiteboardClient (SSR guard — renders loading until mounted)
+              └── WhiteboardInner (all logic lives here)
+```
+
+`WhiteboardClient` uses `useState(false)` + `useEffect` to prevent SSR hydration mismatch (since `getSharedLayers`/`getYdoc` return `null` on server).
+
+### 7.2 Key Refs (stale-closure prevention)
+
+| Ref | Purpose |
+|-----|---------|
+| `selectedIdsRef` | Mirror of `selectedIds` state for event handlers |
+| `isSpaceDownRef` | Mirror of `isSpaceDown` for event handlers |
+| `panStartRef` | Pan gesture start position |
+| `isMarqueeRef` | Whether a marquee drag is active |
+| `dragStartPositions` | `Map<id, {x,y,points?}>` snapshot at drag start |
+| `connectorDraftRef` | Mirror of `connectorDraft` state |
+| `connectorHoverIdRef` | Mirror of `connectorHoverId` state |
+| `cursorThrottleRef` | Throttle instance for awareness cursor (created once per `boardId`) |
+| `clipboardRef` | In-memory clipboard for copy/paste |
+| `showHelpRef` | Mirror of `showHelp` (checked in wheel handler) |
+| `toolModeRef` | Mirror of `toolMode` (checked in keyboard handlers) |
+| `transformRef` | Current pan/zoom (from BoardTransformProvider) |
+
+### 7.3 Tool Modes
 
 ```typescript
 type ToolMode = "select" | "hand" | "connector";
 ```
 
-| Mode | Behaviour |
-|------|-----------|
-| `select` | Click/drag on empty canvas starts marquee selection. Objects are interactive. |
-| `hand` | All pointer-downs pan the canvas. A full-viewport overlay blocks object interaction. |
-| `connector` | A full-viewport overlay captures all pointer events for drawing connectors. Hovering a shape or frame shows anchor points. Dragging from one layer to another creates a `ConnectorLayer` in the Y.Map. |
+| Variable | Meaning |
+|----------|---------|
+| `isHandMode` | `toolMode === "hand" \|\| isSpaceDown` |
+| `isConnectorMode` | `toolMode === "connector" && !isSpaceDown` |
 
-**Space bar** — held from any tool mode (including `connector`) applies a temporary hand mode overlay. Critically, `toolMode` does NOT change when Space is held — only `isSpaceDown` state flips. The hand overlay then captures pan events. The connector overlay is hidden while Space is held (`isConnectorMode = toolMode === "connector" && !isSpaceDown`).
+When Space is held, `toolMode` does NOT change — only `isSpaceDown` flips. This allows returning to the correct mode after Space is released.
 
-**Zoom** is blocked while the help modal is open (`showHelpRef.current` checked inside `handleWheel`).
+### 7.4 Layer Z-Order Rendering
 
-### 4.6 Smart Connectors (`components/ConnectorElement.tsx`)
-
-The most complex rendering component. Key design decisions:
-
-**Edge-to-Edge Routing (`rectEdgePoint`):**
-Casts a parametric ray from the shape center toward the opposing shape center, evaluates `t` for all four rectangle edges, picks the smallest positive `t` that lands on the perimeter. Result: the connector starts and ends exactly on the layer boundary — works for shapes **and frames**.
-
-**Three routing styles:**
-- `straight` — direct line between the two perimeter points
-- `curved` — cubic Bézier; control points are placed in the outward-normal direction of each exit/entry edge at a distance proportional to 40% of inter-shape distance (min 60 px). The tangent is therefore always aligned with the edge.
-- `elbow` — three-segment Manhattan path. Exit direction determines H→V→H or V→H→V routing.
-
-**`getLayerBounds(layer)`** — exported from `ConnectorElement.tsx`. Handles all layer types:
-- `connector` → returns `null` (no bounding rect)
-- `line` → bounding rect of all points
-- all others (including `frame`) → `{ x, y, width, height }` directly
-
-**Connector targets:** Connectors can attach to **any** layer type that has a bounding box (`sticky`, `rectangle`, `circle`, `text`, `line`, `frame`). The frame's visible border is the connection boundary.
-
-**Arrowhead:**
-For `endpoints: "arrow"`, a filled triangle is computed at the target point oriented along the direction the connector arrives (the `arrowNx, arrowNy` unit vector, edge-dependent for curved/elbow styles).
-
-**SVG layout:**
-The component renders as an absolutely-positioned SVG in the `worldTransform` div. Its bounds are computed from all significant path points plus padding. Paths are rebuilt in SVG-local coordinates (world coords minus SVG top-left offset).
-
-**React.memo:**
-The inner component is wrapped in `memo`. The parent (`Whiteboard`) passes `fromLayer` and `toLayer` as resolved props from `useYjsStore`. When either endpoint moves or resizes, `useYjsStore` updates → parent re-renders → new props → connector recalculates.
-
-**Pointer interaction:**
-A wide transparent stroke (`pointer-events: stroke`) serves as the hit area. Clicking triggers `onSelect`.
-
-**Orphan cleanup:**
-A `sharedLayers.observe` listener in `Whiteboard` runs after every Y.Map transaction. It finds any connectors whose `fromId` or `toId` has been deleted and removes them in a new `ydoc.transact`. This runs in the same event loop tick as the deletion, so peers never see a dangling connector.
-
-### 4.7 Frames (`components/FrameElement.tsx`)
-
-Frames are large organizational containers that group content visually and structurally.
-
-**Architecture decisions:**
-- Children are **not stored in the frame object**. The `getElementsInFrame(frameId, allLayers)` helper in `lib/utils.ts` computes containment at runtime using full bounding-box containment (`child.x1 >= frame.x && child.y1 >= frame.y && child.x2 <= frame.x2 && child.y2 <= frame.y2`).
-- Frame nesting is **disabled** — `getElementsInFrame` skips any layer with `type === "frame"` to prevent recursive/circular movement.
-- `getElementsInFrame` also skips `type === "connector"` (connectors are auto-routed, not independently positioned).
-
-**Pointer-events strategy:**
-- `.frameContainer` is `pointer-events: none` — the frame background never blocks clicks on contained shapes.
-- The **title bar** and **four edge strips** (8px each, top/bottom/left/right) are individually set to `pointer-events: auto` — these are the draggable areas.
-- Only the frame's border/title is interactive; clicking anywhere inside the frame body hits the shapes underneath.
-
-**Z-index containment:**
-- `.frameContainer` has `z-index: 0` which creates an isolated CSS stacking context. This confines all child elements (title, edges, resize handles at `z-index: 10`) within the frame's own context. Frames always stay below shapes and connectors in the visual stack.
-- Frames are rendered **first** in the DOM (before connectors and shapes), so they are always the bottommost visual layer.
-
-**Batch move (atomic):**
-When a frame is dragged, `handleDragStart` calls `getElementsInFrame` and adds all contained children to the drag position map. `handleDragDelta` then moves the frame **and** all children together in a single `ydoc.transact`. This is CRDT-safe and atomic for all peers.
-
-**Cascading deletion:**
-When a frame is deleted (toolbar button or `Delete`/`Backspace`), `getElementsInFrame` is called to collect all contained children. The frame and all children are deleted in a single `ydoc.transact`. Connectors attached to deleted layers are cleaned up by the orphan cleanup observer.
-
-**Resizing:**
-Resize handles appear at the four corners when selected. Resizing changes the frame's `width`/`height` only — it does NOT move or scale children (children remain at their world coordinates; containment is re-evaluated dynamically).
-
-**Title editing:**
-Double-clicking the title bar enters an inline `<input>` edit mode. The title is written to `sharedLayers` on blur or Enter/Escape.
-
-**Connector targeting:**
-The connector tool's `hitTestShapeLayers` uses a **two-pass strategy**:
-1. Pass 1: concrete shapes (non-frame, non-connector, non-line) — preferred targets.
-2. Pass 2: frames — fallback if the pointer is over frame background/border but no inner shape.
-
-This means hovering over a shape inside a frame correctly targets the shape, not the frame.
-
-### 4.8 Z-Order Rendering (DOM layering)
-
-All layer elements are absolutely positioned inside a single `worldTransform` div. DOM order determines visual stacking (later = in front). The rendering partition order is:
-
-1. **Frames** (`type === "frame"`) — rendered first → always at the very bottom
-2. **Connectors** (`type === "connector"`) — rendered second → above frames, behind all shapes
-3. **All other shapes** (sticky, rectangle, circle, text, line) — rendered last → topmost
-
-This ordering is enforced in `Whiteboard.tsx`:
 ```typescript
 const frameEntries     = layerEntries.filter(([, l]) => l?.type === "frame");
 const connectorEntries = layerEntries.filter(([, l]) => l?.type === "connector");
 const shapeEntries     = layerEntries.filter(([, l]) => l?.type !== "connector" && l?.type !== "frame");
-// Rendered: frameEntries → connectorEntries → shapeEntries
+// Rendered: frameEntries → connectorEntries → shapeEntries (DOM order = z-stack)
 ```
 
-Within each group, layers render in `Y.Map` insertion order (no user-controllable z-ordering yet).
-
-### 4.9 Database Schema
-
-```sql
--- supabase/schema.sql
-CREATE TABLE yjs_updates (
-  id         bigserial PRIMARY KEY,
-  room_id    text UNIQUE NOT NULL,
-  content    text,  -- base64-encoded Yjs state snapshot
-  created_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE yjs_updates ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Authenticated users can read"   ON yjs_updates FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Authenticated users can insert" ON yjs_updates FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Authenticated users can update" ON yjs_updates FOR UPDATE TO authenticated USING (true);
-CREATE POLICY "Anon users can read"            ON yjs_updates FOR SELECT TO anon USING (true);
-CREATE POLICY "Anon users can insert"          ON yjs_updates FOR INSERT TO anon WITH CHECK (true);
-CREATE POLICY "Anon users can update"          ON yjs_updates FOR UPDATE TO anon WITH CHECK (true);
-
-ALTER PUBLICATION supabase_realtime ADD TABLE yjs_updates;
-```
-
-**Note:** `content` is `TEXT` (base64), not `BYTEA`. Current room ID is hardcoded as `"collab-board-main"` in `lib/yjs-store.ts`.
-
-### 4.10 AI Board Agent
-
-A fully-integrated AI assistant that can create, update, arrange, and delete board content in real-time via natural language. Changes are applied atomically to the shared Yjs document, so every peer sees them instantly.
-
-#### Files
-
-| File | Role |
-|---|---|
-| `app/api/ai/route.ts` | Next.js POST route — classifies the request, selects a model, calls Anthropic, returns tool calls |
-| `lib/ai-executor.ts` | Pure client-side executor — applies tool calls to `sharedLayers` inside a `ydoc.transact` |
-| `components/AIChat.tsx` | Floating chat UI — FAB, collapsible panel, message history, tier badge, status phases |
-| `components/AIChat.module.css` | Styles for the chat panel |
-
-#### Tool Schema (6 tools)
-
-| Tool | Purpose | Key inputs |
-|---|---|---|
-| `create_layer` | Create exactly 1 layer | `type`, `x`, `y`, optional `width`, `height`, `text`, `fill`, `title` |
-| `create_bulk_layers` | Create 2+ layers atomically (preferred) | `layers[]` — array of layer defs |
-| `update_layers` | Change color, position, size, or text on existing layers | `ids[]`, `properties` |
-| `delete_layers` | Remove layers by ID | `ids[]` |
-| `arrange_grid` | Reposition layers into a uniform grid — executor computes coords | `ids[]`, `columns`, `spacing`, `origin_x`, `origin_y` |
-| `resize_frame_to_fit` | Expand/shrink a Frame to wrap children with padding | `frame_id`, `child_ids[]`, `padding` |
-
-All colors are CSS hex strings (e.g. `"#fbbf24"`). The AI is instructed to omit default properties (`rotation: 0`, `opacity: 1`, `fontSize: 16`, etc.) to minimise output tokens.
-
-**Rotation support:** `create_layer`, `create_bulk_layers`, and `update_layers` all accept a `rotation` field (degrees clockwise) for `sticky`, `rectangle`, and `circle` layer types. `ai-executor.ts` defaults `rotation` to `0` in all three builders and passes it through `update_layers` when present in the `properties` payload.
-
-#### Model Routing
-
-Every request selects a model based on the last user message:
+### 7.5 Orphan Connector Cleanup
 
 ```typescript
-// Routing regex in app/api/ai/route.ts
-const REASONING_PATTERNS =
-  /\b(swot|retrospective|retro|sprint|user.?journey|kanban|roadmap|matrix|framework|template|analysis|diagram|workflow)\b/i;
-
-// Fast route  → claude-3-5-haiku-latest   (5× faster, 10× cheaper)
-// Reasoning   → claude-3-5-sonnet-latest  (complex spatial / template planning)
-```
-
-The selected tier (`"fast"` | `"reasoning"`) is returned to the client and displayed as a small badge on each assistant message.
-
-#### Prompt Caching
-
-The system uses Anthropic's ephemeral prompt caching to cut TTFT by ~800 ms on repeated requests:
-
-- **Block 1** — static `SYSTEM_PROMPT` (instructions, rules, blueprints): `cache_control: { type: "ephemeral" }`. Cached for ~5 min; re-tokenised only on cache miss.
-- **Block 2** — dynamic board state (`CURRENT BOARD STATE: ...`): no cache (changes every request).
-- **Last tool** (`resize_frame_to_fit`) — `cache_control: { type: "ephemeral" }`. Caches the entire tool block as one unit (Anthropic's requirement: cache break point on the final item).
-
-#### Blueprint Prompts
-
-The system prompt includes exact pixel-level specifications so Claude emits correct coordinates on the first attempt:
-
-- **SWOT Analysis** — 860×860 Frame + 4 colored 400×400 rectangle quadrants + 4 bold text labels (9 objects total via `create_bulk_layers`)
-- **Retrospective** — 3 Frames (400×600, 40 px apart): "What Went Well" / "What Didn't" / "Action Items"
-- **User Journey** — 5 Frames (280×400, 40 px apart) with stage text labels
-
-#### `lib/ai-executor.ts` — Executor Architecture
-
-```typescript
-export function executeAiTools(
-  toolCalls: AiToolCall[],
-  sharedLayers: Y.Map<LayerData>,
-  ydoc: Y.Doc,
-): void {
-  ydoc.transact(() => {          // ← single atomic Yjs transaction
-    for (const call of toolCalls) {
-      try {
-        // hot path first
-        switch (call.name) {
-          case "create_bulk_layers": ...   // build all layers, then write in one pass
-          case "create_layer":       ...
-          case "update_layers":      ...
-          case "delete_layers":      ...
-          case "arrange_grid":       ...   // computes grid coords from max item dimensions
-          case "resize_frame_to_fit": ...  // union-bbox children → set frame x/y/w/h
-        }
-      } catch (err) {
-        console.error(...);  // one bad call never aborts the whole transaction
+useEffect(() => {
+  const cleanup = () => {
+    const toDelete: string[] = [];
+    for (const [id, layer] of sharedLayers.entries()) {
+      if (layer?.type !== "connector") continue;
+      if (!sharedLayers.has(conn.fromId) || !sharedLayers.has(conn.toId)) {
+        toDelete.push(id);
       }
     }
-  });
-}
+    if (toDelete.length > 0) {
+      ydoc.transact(() => { for (const id of toDelete) sharedLayers.delete(id); });
+    }
+  };
+  sharedLayers.observe(cleanup);
+  return () => sharedLayers.unobserve(cleanup);
+}, []);  // ← empty deps array
 ```
 
-Key details:
-- `create_bulk_layers` separates the CPU phase (build all `LayerData` objects) from the I/O phase (all `sharedLayers.set` calls) for maximum locality.
-- `arrange_grid` uses `max(all widths)` / `max(all heights)` as the uniform cell size so mixed-size items never collide.
-- `resize_frame_to_fit` computes the union bounding box of all children and repositions + resizes the frame with configurable padding (default 40 px).
-- Missing IDs are skipped with a `console.warn` — the transaction still commits.
-- `normaliseColor()` accepts both CSS hex strings and legacy numeric colors from the AI.
+**Note:** `sharedLayers` and `ydoc` are captured at component mount. They don't change across renders for the same `boardId`, but the empty dep array is technically a lint violation.
 
-#### `components/AIChat.tsx` — UI Architecture
+### 7.6 Batch Drag
 
-- **Floating FAB** fixed to `bottom: 4.5rem; right: 1rem` (above the help button at `1rem`). Uses `pointer-events: none` on the wrapper and `pointer-events: all` only on the FAB/panel, so the canvas underneath remains fully interactive.
-- **Two message arrays** are maintained: `displayMessages` (drives the UI) and `apiMessages` (Anthropic-format history for multi-turn context). After a tool-use turn, the assistant slot is filled with a plain-text summary so subsequent turns have valid history without needing `tool_result` blocks.
-- **Phased loading status**: `"AI is working…"` shown immediately on submit; escalates to `"Still generating…"` after 4 s via `slowTimerRef` (honest feedback without fake streaming).
-- **Immediate execution**: `executeAiTools` is called synchronously the moment `res.json()` resolves — zero extra delay.
-- **Model tier badge**: each assistant bubble shows a small inline `haiku` (green) or `sonnet` (purple) badge.
+On `handleDragStart(draggedId)`:
+1. Collects selected IDs + any contained children of selected frames
+2. Snapshots starting positions from live `sharedLayers`
+3. Stores in `dragStartPositions.current`
 
----
-
-## 5. Component Reference
-
-### `components/Whiteboard.tsx` — Core Canvas
-
-The brain of the UI. Key responsibilities:
-
-**Canvas & transforms:**
-- Renders an infinite canvas div transformed via `transform: translate(x, y) scale(zoom)`
-- All layer positions are world-space; CSS transform applies pan/zoom
-
-**Pointer event handling:**
-- `pointerdown` on empty canvas (select mode) → start marquee drag
-- `pointerdown` on empty canvas (hand mode) → start pan drag
-- Connector overlay (connector mode) → drag from shape/frame to shape/frame
-- `pointermove` → update pan / marquee / awareness cursor
-- `wheel` → zoom toward cursor (no-op if help modal is open)
-
-**Tool modes:**
-- `V` → select, `H` → hand, `C` → connector
-- Space (hold) → temporary hand from any mode, including connector
-- `Escape` → in connector mode: cancel draft + return to select; otherwise: deselect all
-
-**Layer rendering (z-order):**
-1. FrameElements (lowest DOM position → visually at the bottom)
-2. ConnectorElements (above frames, below all shapes)
-3. All other layer types (StickyNote, ShapeRectangle, etc.)
-
-**Connector-specific UI:**
-- Connector overlay div (z-index 51) captures all pointer events when `isConnectorMode`
-- 4 pulsing anchor dots rendered in world-space over the hovered shape or frame
-- Dashed blue preview line rendered during drag
-- On pointer-up over a different layer: creates `ConnectorLayer` in `sharedLayers`
-
-**Orphan cleanup:**
+On `handleDragDelta(dx, dy)`:
 ```typescript
-sharedLayers.observe(() => {
-  // find connectors with missing fromId/toId
-  // delete them in a single ydoc.transact()
+ydoc.transact(() => {
+  for (const [id, startPos] of dragStartPositions.current) {
+    sharedLayers.set(id, { ...layer, x: startPos.x + dx, y: startPos.y + dy });
+  }
+});
+```
+Single transaction = one Yjs broadcast = one undo step.
+
+### 7.7 Connector Creation
+
+```typescript
+// handleConnectorPointerUp — no ydoc.transact() wrapper
+sharedLayers.set(connId, conn);
+updateSelectedIds(new Set([connId]));
+```
+
+Connector creation uses a bare `sharedLayers.set()` without `ydoc.transact()`. Yjs treats each un-wrapped `set()` as its own implicit transaction. This is correct but inconsistent with the rest of the codebase.
+
+### 7.8 Paste Accumulates Offset
+
+```typescript
+// After paste, clipboardRef is mutated to offset by PASTE_OFFSET:
+clipboardRef.current = clipboardRef.current.map((l) => {
+  return { ...l, x: l.x + PASTE_OFFSET, y: l.y + PASTE_OFFSET, ... };
 });
 ```
 
-**Formatting panel (context-sensitive, shown in toolbar when items are selected):**
-- Fill color — rectangles, circles, sticky notes, **frames** (updates `backgroundColor`)
-- Text color — text elements
-- Stroke color — lines/arrows
-- Connector color, routing style (Straight/Curved/Elbow), endpoint style (Arrow/Dot/None) — connectors
-- Font size ±2 stepper — sticky notes and text elements
+Each Ctrl+V shifts the clipboard items by 20px. Repeated pastes cascade the offset indefinitely. After 10 pastes, items appear 200px away from original. This is by design (standard behavior) but worth noting.
 
-**Keyboard shortcuts:**
+### 7.9 Keyboard Handler Dependencies
 
-| Key | Action |
-|-----|--------|
-| `V` | Select tool |
-| `H` | Hand / pan tool |
-| `C` | Connector tool |
-| `Space` (hold) | Temporary pan (all modes) |
-| `Esc` | Cancel connector draft / deselect all / exit connector mode |
-| `⌘A` | Select all layers |
-| `⌘D` | Duplicate selection (20 px offset; skips connectors and frames) |
-| `⌘C` | Copy selection to in-memory clipboard (skips connectors) |
-| `⌘V` | Paste from clipboard (20 px offset, repeated pastes stack) |
-| `Delete` / `Backspace` | Delete selected layers + any frame children; orphan connectors auto-cleaned |
-| `?` | Toggle help modal |
+The main `onKeyDown` handler is in a `useEffect` with deps `[updateSelectedIds, setToolMode, setConnectorDraft, setConnectorHoverId]`. It captures `sharedLayers`, `ydoc`, `clipboardRef`, `selectedIdsRef`, `toolModeRef`, `showHelpRef`, `isSpaceDownRef` — all via closure. Since these don't change across renders for the same board, this is safe but technically missing from the dep array.
 
-**Help modal zoom-lock:** `handleWheel` checks `showHelpRef.current` before applying any zoom change, so scrolling while the help panel is open does nothing to the board.
+### 7.10 `handleBoardPointerDown` Stale Pan
 
-### `components/FrameElement.tsx`
-
-Exported: `FrameElement`, `FRAME_TITLE_HEIGHT` (= 28px, the height of the title bar above the frame body).
-
-The frame renders as:
-```
-[ title bar — draggable, pointer-events: auto         ]
-┌──────────────────────────────────────────────────────┐
-│ top edge strip (pointer-events: auto, 8px tall)      │
-│                                                      │
-│  frame body background (pointer-events: none)        │
-│  contained shapes render here in the DOM layer above │
-│                                                      │
-│ bottom edge strip (pointer-events: auto, 8px tall)   │
-└──────────────────────────────────────────────────────┘
-left/right edge strips (pointer-events: auto, 8px wide)
-[NW] [NE] [SW] [SE] resize handles (when selected, pointer-events: auto)
+```typescript
+const handleBoardPointerDown = useCallback((e) => {
+  // ...
+  panStartRef.current = { x: e.clientX, y: e.clientY, startPanX: pan.x, startPanY: pan.y };
+}, [pan, getScreenPos]);
 ```
 
-The `.frameContainer` div has `z-index: 0` to create an isolated stacking context — this permanently confines the `z-index: 10` resize handles within the frame's own visual layer, preventing them from appearing above shapes.
+`pan` is in the dep array, so this handler recreates on every pan change. During a pan gesture, `panStartRef` is set on `pointerdown` and then `panStartRef.startPanX/Y` is used in `handleBoardPointerMove`. The `pan` value captured in `panStartRef` at pointerdown is correct because it's the pan at gesture start. However, the handler is recreated very frequently.
 
-### `components/ConnectorElement.tsx`
+### 7.11 `handleWheel` — Unclamped Zoom Bug
 
-Exported: `ConnectorElement` (memo-wrapped), `getLayerBounds`, `LayerBounds`.
+```typescript
+const handleWheel = useCallback((e) => {
+  const { pan: p, zoom: z } = transformRef.current;
+  const worldX = (pos.sx - p.x) / z;
+  const worldY = (pos.sy - p.y) / z;
+  const delta = e.deltaY > 0 ? -0.1 : 0.1;
+  const newZoom = z + delta;                         // ← NOT clamped here
+  setPan({ x: pos.sx - worldX * newZoom, ... });    // ← uses unclamped newZoom
+  setZoom(newZoom);                                  // ← setZoom WILL clamp
+}, [...]);
+```
 
-`getLayerBounds(layer)` — computes `{ cx, cy, x1, y1, x2, y2 }` for any non-connector layer. Used both by `ConnectorElement` for routing and by `Whiteboard` for anchor point and hit-test computation. **Handles `FrameLayer`** via the generic `x/y/width/height` path — connectors attach to the frame's actual border.
+`setZoom` in `BoardTransformProvider` clamps to `[MIN_ZOOM, MAX_ZOOM]`. But `setPan` is called with `newZoom` before clamping. If zoom is already at `MIN_ZOOM = 0.01` and the user scrolls down, `newZoom = -0.09`. The pan is then `pos.sx - worldX * (-0.09)` — flipping the sign, causing a large pan jump. Meanwhile `setZoom(-0.09)` clamps to `0.01`, so zoom stays correct but pan is now wrong.
 
-Rendering layers (inside the SVG, from bottom to top):
-1. Blue glow path (when `selected`)
-2. Wide transparent hit-area path (`pointer-events: stroke`)
-3. Main visible stroke (respects `dashArray`)
-4. Source endpoint dot (if `endpoints === "dot"`)
-5. Target arrowhead polygon (if `endpoints === "arrow"`) or dot
-6. Label `<text>` at midpoint with white paint-order stroke for legibility
-
-### `lib/utils.ts`
-
-Exports:
-- `cn(...classes)` — class-name joiner utility
-- `getElementsInFrame(frameId, allLayers)` — returns IDs of layers fully contained within a frame's bounding box. Skips connectors (no independent bbox) and other frames (prevents nesting/recursion). Uses **strict full containment**: `child.x1 >= frame.x && child.y1 >= frame.y && child.x2 <= frame.x+w && child.y2 <= frame.y+h`.
-
-### `components/StickyNote.tsx`
-
-- Drag: batch drag via `onDragStart / onDragDelta / onDragEnd`
-- Resize: 4 corner handles with directional logic
-- **Rotation:** when selected, a `RotateCw` icon handle appears on a short connector line 44 px above the shape's top-center. Dragging it rotates the shape around its geometric center. Angle is computed in world space via `Math.atan2` relative to the shape's center; each frame update is written with `ydoc.transact()`.
-- Edit: double-click → `<textarea>`, Escape/Enter saves to `sharedLayers`
-- Selection: shows blue border ring; click calls `onSelect(shiftKey)`
-- Configurable: `fontSize` (default 14), `bgColor` (default `#fffbeb`), `rotation` (default 0°)
-- Min size: 80×60 px
-- CSS: `transform: rotate(${rotation}deg); transform-origin: center` on the root div
-
-### `components/ShapeRectangle.tsx`
-
-Same drag/resize/select pattern. Configurable `fill` (default `#93c5fd`), `rotation` (default 0°). Min size 60×60 px. Rotation handle and CSS transform identical to StickyNote.
-
-### `components/ShapeCircle.tsx`
-
-Same as rectangle. `border-radius: 50%` makes it circular. Shift-constrained resize to square. Configurable `fill` (default `#86efac`), `rotation` (default 0°). Rotation handle and CSS transform identical to StickyNote.
-
-### `components/TextElement.tsx`
-
-Same drag/resize/select pattern. Configurable `fontSize`, `fontWeight`, `color`. Default 200×40 px.
-
-### `components/LineElement.tsx`
-
-SVG-based. Points stored as absolute world-space `[number, number][]`. Body drag routes through batch drag callbacks. Endpoint handles drag individual points. Variants: `"straight"` and `"arrow"` (arrowhead computed from last two points).
-
-### `components/HelpModal.tsx`
-
-Sections: **Tools** (V, H, C, Space, Esc), **Selection** (⌘A, Shift+Click, Drag, Esc), **Connectors** (C, drag flow, anchor hints, Space pan, Esc cancel), **Edit** (⌘D, ⌘C, ⌘V, Del), **View** (Scroll, Reset, ?).
-
-Closes on Escape or click-outside. Does not block Whiteboard keyboard handlers (modal has its own `keydown` listener).
-
-### `components/Avatars.tsx`
-
-Reads `useAwareness()`. Shows `<img>` (avatar URL) or first letter of name per remote user. Fixed top-left, stacked with slight overlap.
-
-### `components/CursorPresence.tsx`
-
-Reads `useAwareness()`. Converts world cursor → screen via `worldToScreen()`. Renders SVG cursor + name label per user. `pointer-events: none`.
+**This is a confirmed bug.** The fix is to clamp `newZoom` before the pan calculation.
 
 ---
 
-## 6. Environment Variables
+## 8. Frame System (`components/FrameElement.tsx`)
 
-| Variable | Purpose |
-|---|---|
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk public key |
-| `CLERK_SECRET_KEY` | Clerk secret key (server-side only) |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon/public key |
-| `ANTHROPIC_API_KEY` | Anthropic API key — server-side only, required for the AI Board Agent |
+### 8.1 DOM Layout
 
----
+```
+<div className={frameContainer} style={{ left: x, top: y - TITLE_HEIGHT, width, height: height + TITLE_HEIGHT }}>
+  <div titleBar (pointer-events: auto, h=28px)>...</div>
+  <div frameBody (pointer-events: none, relative)>
+    <div edgeTop    (pointer-events: auto, 8px) />
+    <div edgeBottom (pointer-events: auto, 8px) />
+    <div edgeLeft   (pointer-events: auto, 8px) />
+    <div edgeRight  (pointer-events: auto, 8px) />
+  </div>
+  {selected && <>
+    <div handleNW (top: TITLE_HEIGHT-6) />
+    <div handleNE (top: TITLE_HEIGHT-6) />
+    <div handleSW />
+    <div handleSE />
+  </>}
+</div>
+```
 
-## 7. Features Fully Implemented
+The `frameContainer` div is positioned at `top: y - TITLE_HEIGHT` to make room for the title bar above the frame body.
 
-| Feature | Status | Notes |
-|---|---|---|
-| User authentication | ✅ | Clerk, protected routes, sign in/out |
-| Real-time collaboration (CRDT) | ✅ | Yjs Y.Map, custom Supabase provider |
-| Board persistence | ✅ | Auto-saves to Supabase Postgres every 5 s |
-| Sticky notes | ✅ | Create, drag, resize, edit, font size, bg color, delete |
-| Rectangle shapes | ✅ | Create, drag, resize, fill color, delete |
-| Circle/ellipse shapes | ✅ | Create, drag, resize, fill color, delete |
-| Text elements | ✅ | Create, drag, resize, edit, font size, text color, delete |
-| Lines | ✅ | Create, drag endpoints, stroke color |
-| Arrows | ✅ | Lines with arrowhead variant |
-| **Smart Connectors** | ✅ | Edge-to-edge routing, 3 styles, 3 endpoint types, label, color, orphan cleanup, z-ordering |
-| **Connector → Frame targeting** | ✅ | Connectors attach to any layer incl. frames; two-pass hit-test prioritises inner shapes |
-| Connector tool (C) | ✅ | Overlay, anchor dots, preview line, pointer-capture drag |
-| Connector formatting | ✅ | Color, routing style, endpoint style via toolbar panel |
-| Connector orphan cleanup | ✅ | Y.Map observer purges dangling connectors transactionally |
-| **Frames** | ✅ | Org containers with title, draggable border, resize, fill color |
-| **Frame batch move** | ✅ | Dragging a frame moves it + all fully-contained children atomically via `ydoc.transact` |
-| **Frame cascading delete** | ✅ | Deleting a frame deletes all contained children in one transaction |
-| **Frame z-index isolation** | ✅ | `z-index: 0` on container confines handles; frames always stay below shapes |
-| **Frame connector support** | ✅ | Frames are valid connector endpoints; hit-test prefers inner shapes over frame |
-| Infinite canvas pan | ✅ | Mouse drag on empty space (select or hand mode) |
-| Infinite canvas zoom | ✅ | Mouse wheel toward cursor; blocked while help modal is open |
-| Tool modes (Select / Hand / Connector) | ✅ | Toolbar buttons + V / H / C shortcuts |
-| Space bar temporary pan | ✅ | Works from all tool modes including Connector |
-| Multi-select | ✅ | Shift+click, marquee drag, ⌘A |
-| Marquee selection | ✅ | Drag on empty canvas, connectors excluded |
-| Batch drag | ✅ | All selected items move together, single `ydoc.transact` |
-| Duplicate | ✅ | ⌘D or toolbar; skips connectors and frames |
-| Copy / Paste | ✅ | ⌘C / ⌘V, in-memory clipboard; skips connectors |
-| Context-sensitive formatting | ✅ | Fill (incl. frames), text color, stroke, connector style, font size |
-| Live cursor presence | ✅ | Remote cursors with username labels |
-| User avatar display | ✅ | Connected user list, top-left |
-| Keyboard shortcuts | ✅ | Full set including connector shortcuts |
-| Help modal | ✅ | All shortcuts, includes Connector section |
-| Zoom locked during help modal | ✅ | `showHelpRef` checked in wheel handler |
-| Reset view | ✅ | Toolbar button resets pan + zoom |
-| Deployment guide | ✅ | Vercel + Supabase documented in DEPLOY.md |
-| **AI Board Agent — chat UI** | ✅ | Floating FAB + collapsible panel, multi-turn history, tier badge, phased status |
-| **AI Board Agent — model routing** | ✅ | Haiku for simple commands; Sonnet for templates (SWOT, Retro, Journey) |
-| **AI Board Agent — prompt caching** | ✅ | System prompt + tool block cached ephemerally; ~800 ms TTFT reduction |
-| **AI Board Agent — 6 tools** | ✅ | create_layer, create_bulk_layers, update_layers, delete_layers, arrange_grid, resize_frame_to_fit |
-| **AI Board Agent — atomic execution** | ✅ | All tool calls applied in a single `ydoc.transact` — one broadcast to all peers |
-| **AI Board Agent — blueprint prompts** | ✅ | SWOT Analysis, Retrospective, User Journey with exact pixel coordinates |
-| **Shape rotation** | ✅ | Sticky notes, rectangles, circles — drag rotation handle, CRDT-synced via `ydoc.transact`, CSS `transform: rotate()` |
-| **Rotation — AI support** | ✅ | `rotation` field accepted by `create_layer`, `create_bulk_layers`, `update_layers` in `ai-executor.ts` |
-| **Graceful disconnect/reconnect UI** | ✅ | Non-blocking floating badge (pulsing amber dot + WifiOff icon); driven by `window` online/offline events + Supabase channel status; `lastStatus` replay prevents singleton race condition |
-| **Vitest test suite** | ✅ | 7 tests total: 3 connection-status (channel error, window online/offline, late-callback replay) + 4 cursor-throttle (unthrottled pan, 33 ms suppression, trailing-edge coords, pointerleave cancel) (`npm test`) |
-| **Cursor awareness throttle** | ✅ | `lib/throttle.ts` — leading+trailing 33 ms throttle; only awareness write is throttled; pan/drag remain at 60 FPS; pointerleave bypasses and immediately sends `null`; stale-closure-safe via `useRef` |
+### 8.2 `updateFrame` — No Transaction Wrapper
 
----
+```typescript
+const updateFrame = useCallback((newX, newY, newWidth, newHeight) => {
+  const sharedLayers = getSharedLayers(boardId);
+  const current = sharedLayers.get(id) as FrameLayer;
+  sharedLayers.set(id, { ...current, x: newX, y: newY, width: newWidth, height: newHeight });
+}, [boardId, id]);
+```
 
-## 8. Known Limitations & What Should Be Worked On Next
+Called on every `pointermove` during resize. Each call creates a separate Yjs transaction and a separate broadcast. This generates many small updates during resize (potentially 60/s). Compare to batch drag which uses `ydoc.transact()`. The frame does not have access to `ydoc` because it doesn't import it — only `getSharedLayers` is imported.
 
-### 8.1 High Priority
+### 8.3 `handleTitleChange` — No Transaction
 
-**1. Undo / Redo**
-- Yjs has built-in `Y.UndoManager` but it is not wired up
-- All mutations already use `ydoc.transact()` so each action will be a clean undo step
-- Requires: wiring `Y.UndoManager`, toolbar buttons, `⌘Z` / `⌘Shift+Z` shortcuts
+Same issue — each keystroke in the title input calls `sharedLayers.set()` directly, creating one Yjs transaction per character.
 
-**2. Multiple Boards / Room System**
-- Currently exactly **one hardcoded board** (`"collab-board-main"`)
-- Requires: board listing UI, per-board room IDs, URL routing (`/board/[id]`), `boards` table in Supabase
+### 8.4 `handlePointerLeave` Triggers `onDragEnd`
 
-**3. Layer Z-Ordering**
-- Within each rendering group (frames, connectors, shapes) layers render in Y.Map insertion order — no "bring to front / send to back"
-- Requires: storing a `z` / `order` field, or using `Y.Array` for ordered layer list
+```typescript
+onPointerLeave={handlePointerUp}
+```
 
-**4. Freehand Drawing**
-- No pencil/freehand tool
-- Requires: a new layer type with `Y.Array` of stroke points, or a dedicated freehand layer
+The edge strips and title bar call `handlePointerUp` (which calls `onDragEnd`) on `pointerLeave`. If the user drags quickly past the edge strip while dragging, `onDragEnd` fires prematurely even though the pointer is captured. However, since `setPointerCapture` is called in `handlePointerDown`, `pointerleave` events on the element should not fire while captured... but `onPointerLeave` on the parent div may still fire.
 
-### 8.2 Medium Priority
+### 8.5 Resize Handle Pointer Capture
 
-**5. Rich Text in Sticky Notes / Text Elements**
-- Plain `<textarea>` — no bold/italic/markdown
-- Concurrent edits to `text` field are last-write-wins (not character-level merge)
-- True collaborative text requires `Y.Text` + `y-prosemirror` / Tiptap (architecturally significant change)
+```typescript
+const handleResizePointerDown = useCallback((e, handle) => {
+  (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  resizeStartRef.current = { handle, ... };
+}, [...]);
+```
 
-**6. Connector Labels (editable)**
-- `ConnectorLayer.label` field exists and renders, but there is no UI to set or edit it
-- Should add an inline double-click edit flow for connector labels
+`setPointerCapture` is set on `e.target` (the handle div). `handlePointerMove` is on the same handle div and also on other elements, so it will receive captured events. But if the user releases outside all tracked elements, `handlePointerUp` may not fire — pointer capture ensures events continue to the capturing element.
 
-**7. Image Upload / Embedding**
-- No image layer type; would require Supabase Storage
+### 8.6 `handlePointerUp` — Wrong Element for Release
 
-**8. Export / Share**
-- No PNG / SVG / PDF export
+```typescript
+const handlePointerUp = useCallback((e) => {
+  if (e.button === 0) {
+    dragStartRef.current = null;
+    resizeStartRef.current = null;
+    onDragEnd();
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  }
+}, [onDragEnd]);
+```
 
-**9. Minimap**
-- No overview minimap for navigating large boards
-
-**10. Frame Contents Shown on Title Bar**
-- Frame title bar could show a count badge ("3 items") for UX clarity
-
-### 8.3 Lower Priority / Technical Debt
-
-**11. Per-User Cursor Colors**
-- All remote cursors look identical except for the name label
-- Should assign each connected user a distinct colour
-
-**~~12. Reconnection & Offline UI~~** ✅ **Implemented**
-- A non-blocking floating badge (dark pill, pulsing amber dot, WifiOff icon, "Reconnecting…" text) appears at the top-center of the screen whenever `connectionStatus === "disconnected"`
-- Driven by `window` online/offline events (reliable for DevTools) + Supabase channel subscribe status
-- `SupabaseYjsProvider.setStatusCallback()` replays `lastStatus` on registration to fix mount-order race conditions
-- Canvas and all tools remain fully interactive while the badge is visible (`pointer-events-none`)
-
-**13. Board Access Control**
-- Any authenticated user accesses the same board
-- For real enterprise use: boards need owners, collaborators, view-only guests
-
-**14. Performance on Large Boards**
-- All layers rendered as DOM elements — no virtualization
-- Hundreds of elements would degrade performance
-- Mitigation: canvas-based rendering (Konva.js) or off-screen element virtualization
-
-**15. Mobile / Touch Support**
-- No pinch-to-zoom gesture handling; primarily desktop-oriented
-
-**~~16. Cursor Awareness Throttling~~** ✅ **Implemented**
-- `lib/throttle.ts` provides a pure leading+trailing-edge `throttleTrailing()` utility
-- In `Whiteboard.tsx`, only the `awareness.setLocalStateField` call is throttled at 33 ms (~30 FPS); canvas pan, marquee, and shape dragging still run at full pointer-event rate
-- A `useRef` holds the throttle instance (created once in `useEffect`) — no stale closures across React re-renders
-- `pointerleave` calls `cancel()` then immediately writes `cursor: null`, bypassing the throttle entirely
-- 4 Vitest unit tests cover all four behaviours
-
-**17. AI Agent — follow-on improvements**
-- Streaming responses (currently non-streaming, waits for full response)
-- Connector creation via AI (the `ConnectorLayer` type is not yet exposed as an AI tool)
-- Undo for AI-driven changes (Yjs `UndoManager` would treat the whole transaction as one step — ideal)
-- Board-context summarisation ("what's on my board?") using a text-response path alongside tool calls
+`releasePointerCapture` is called on `e.target`, but the capture was set in `handlePointerDown` on `e.target` at that time. If `e.target` during `pointerup` differs from `e.target` during `pointerdown` (which can happen when elements re-render), the release call may silently fail. The capture expires naturally so this isn't a hard bug, but it's not clean.
 
 ---
 
-## 9. Development Principles (from PROJECT.md)
+## 9. Connector System (`components/ConnectorElement.tsx`)
 
-1. **Priority #1:** Bulletproof multiplayer sync (Yjs CRDT + Supabase Realtime). No third-party sync service.
-2. **Priority #2:** Enterprise security (Clerk + Supabase RLS).
-3. TypeScript strict mode for all components; strict typing for all layer types.
-4. Follow Yjs + Supabase integration patterns (shared Y.Doc, custom SupabaseYjsProvider, persistence via `yjs_updates`).
-5. For AI features, use Anthropic Claude 3.5 Sonnet tool-calling patterns.
+### 9.1 `getLayerBounds` — Exported Function
+
+```typescript
+export function getLayerBounds(layer: LayerData): LayerBounds | null {
+  if (layer.type === "connector") return null;
+  if (layer.type === "line") { ... } // computes bbox of all points
+  // For sticky: width ?? 0, height ?? 0 — if optional fields are undefined, bbox is degenerate (0 width/height)
+  const w = (layer as { width?: number }).width ?? 0;
+  const h = (layer as { height?: number }).height ?? 0;
+  return { cx: layer.x + w/2, cy: layer.y + h/2, x1: layer.x, y1: layer.y, x2: layer.x+w, y2: layer.y+h };
+}
+```
+
+For `StickyLayer` with undefined `width`/`height`, the bbox is `{cx: x, cy: y, x1: x, y1: y, x2: x, y2: y}` — a degenerate zero-area rectangle. A connector attached to such a sticky note would start/end at the top-left corner with no edge routing. In practice this shouldn't occur since the toolbar always sets explicit dimensions.
+
+### 9.2 `rectEdgePoint` — Edge Routing
+
+Uses parametric ray casting from shape center toward the opposing shape center. Checks all four rectangle edges and picks the smallest positive `t`. The `check` function guards against `t <= 0.001` to avoid the "behind the ray" case.
+
+**Edge case:** When two shapes overlap (bounding boxes intersect), `rectEdgePoint` may return a point that appears inside the other shape. The connector will draw but the visual result is counterintuitive.
+
+### 9.3 Elbow Direction Re-Detection in Local Space
+
+```typescript
+// When converting world-space path to SVG-local coordinates for elbow style:
+const exitHoriz = Math.abs(localPts[1][1] - localPts[0][1]) < 0.5;
+```
+
+This heuristic re-determines exit direction in local SVG coordinates (using Y equality). It works for axis-aligned segments but could misclassify if floating-point conversion causes a Y difference > 0.5. The world-space `srcEdge` value is not passed into the SVG reconstruction code — it relies on this geometric approximation.
+
+### 9.4 `ConnectorElement` is `memo`-wrapped
+
+`ConnectorElement = memo(ConnectorElementInner)`. The component receives `fromLayer` and `toLayer` as resolved objects from `useYjsStore`. Since `useYjsStore` returns `new Map(...)` on every change, parent re-renders propagate new object references for `fromLayer`/`toLayer` even if the layer data hasn't changed (shallow comparison fails for objects). `memo` won't help here — the connector always re-renders when any layer changes.
 
 ---
 
-## 10. How to Run Locally
+## 10. `getElementsInFrame` (`lib/utils.ts`)
+
+```typescript
+export function getElementsInFrame(frameId, allLayers): string[] {
+  // ...
+  // Bounding box for sticky with optional width/height:
+  x2 = layer.x + ((layer as { width?: number }).width ?? 0);
+  y2 = layer.y + ((layer as { height?: number }).height ?? 0);
+  // Containment check (STRICT — child must be fully inside frame):
+  if (x1 >= fx && y1 >= fy && x2 <= fx2 && y2 <= fy2) result.push(id);
+}
+```
+
+- Skips `connector` and `frame` layers (no recursive nesting)
+- Uses `?? 0` fallback for optional dimensions — a 0-width sticky would be "contained" if its top-left is inside the frame. This is unlikely in practice but technically possible if someone sets width to 0 via AI.
+- Strict containment: **entire** element must be inside. Elements touching the frame border exactly are included (uses `>=` / `<=`).
+
+---
+
+## 11. Cursor Awareness Throttle (`lib/throttle.ts` + `Whiteboard.tsx`)
+
+### 11.1 `throttleTrailing` Implementation
+
+```typescript
+const throttled = (...args) => {
+  lastArgs = args;
+  const now = Date.now();
+  if (timer !== null) { clearTimeout(timer); timer = null; }
+  const elapsed = now - lastCallTime;
+  if (elapsed >= delay) {
+    lastCallTime = now;
+    fn(...args);
+  } else {
+    const remaining = delay - elapsed;
+    timer = setTimeout(() => {
+      lastCallTime = Date.now();
+      fn(...(lastArgs as Parameters<T>));
+      timer = null;
+    }, remaining);
+  }
+};
+```
+
+**Behavior:** Leading edge fires immediately. Subsequent calls within `delay` ms clear and reset the timer. The last call's args are captured in `lastArgs` and fired after the window expires (trailing edge).
+
+**Issue:** The timer is cleared and reset on every intermediate call. This means: if the user moves the mouse continuously at 60fps with `delay=33ms`, the trailing timer is cancelled and re-set on every frame. The trailing call fires only after the mouse stops moving for 33ms. During continuous motion, only the leading-edge call fires (once per 33ms) because the timer never gets to fire — it's always cancelled. Actually wait: the timer is reset to `remaining`, not `delay`. So it fires `remaining` ms after the last call. Since calls arrive every ~16ms and delay=33ms, `elapsed` will usually be < 33ms (second call in ~16ms), so a timer is set for ~17ms. The next call at ~32ms total arrives and cancels that timer. Only at the end (when no new call arrives within remaining time) does the trailing call fire. This correctly ensures the final position is sent.
+
+### 11.2 Usage in Whiteboard
+
+```typescript
+// Created once per boardId mount:
+useEffect(() => {
+  const throttled = throttleTrailing((x: number, y: number) => {
+    const awareness = getAwareness(boardId);  // read live, not captured
+    awareness.setLocalStateField("user", { ...prev, cursor: { x, y } });
+  }, 33);
+  cursorThrottleRef.current = throttled;
+  return () => throttled.cancel();
+}, [boardId]);
+
+// Called in handlePointerMove:
+cursorThrottleRef.current?.fn(Math.round(world.x), Math.round(world.y));
+
+// On pointerleave:
+cursorThrottleRef.current?.cancel();
+awareness.setLocalStateField("user", { ...prev, cursor: null });
+```
+
+`getAwareness(boardId)` is called at invocation time (not closure time) — avoids stale awareness reference across re-renders.
+
+---
+
+## 12. AI Board Agent
+
+### 12.1 API Route (`app/api/ai/route.ts`)
+
+**Model routing:**
+```typescript
+const REASONING_PATTERNS = /\b(swot|retrospective|retro|sprint|user.?journey|...)\b/i;
+// Fast: "claude-haiku-4-5"
+// Reasoning: "claude-sonnet-4-6"
+```
+
+Model names are hardcoded strings — will break if Anthropic renames or deprecates these model IDs.
+
+**SSE streaming:**
+```typescript
+const stream = anthropic.messages.stream({ tool_choice: { type: "any" }, ... });
+// Events accumulated:
+// content_block_start (tool_use) → pending.set(index, { name, jsonAccum: "" })
+// content_block_delta (input_json_delta) → block.jsonAccum += partial_json
+// content_block_stop → parse jsonAccum → SSE event { type: "tool_call", name, input }
+// message_stop → SSE event { type: "done", tier }
+```
+
+`tool_choice: { type: "any" }` forces the model to always call a tool. If the model needs to ask for clarification or handle an error state, it must do so via a tool call. The system prompt instructs "Zero plain-text" but edge cases may produce unexpected tool usage.
+
+**Max tokens:** Haiku tier: 1024, Sonnet tier: 4096. A SWOT analysis with 4 quadrants of bullet points could approach this limit.
+
+### 12.2 Streaming SSE Client (`components/AIChat.tsx`)
+
+```typescript
+const reader = res.body.getReader();
+const decoder = new TextDecoder();
+// Accumulates text, splits on "\n\n", parses JSON after "data: "
+// On { type: "tool_call" }: collectedCalls.push({ name, input })
+// On { type: "done" }: executeAiTools(collectedCalls, ...)
+// On { type: "error" }: show error message
+```
+
+Tool calls are **collected** during streaming and then **all executed at once** via `executeAiTools` after the stream completes. They are NOT executed one-by-one as each arrives. The `executeAiTools` call wraps everything in one `ydoc.transact()`.
+
+**Multi-turn history:** `apiMessages` maintains a simplified text history. After a tool-use turn, the assistant response is stored as a plain-text summary (`"Done — create_bulk_layers ×3"`), not as the actual tool-use blocks. This bypasses Anthropic's requirement for tool-result blocks in multi-turn tool-calling conversations. This technically violates the Anthropic API message format for tool use, but works because the next request starts fresh with the summary as context.
+
+**Board state serialization:**
+```typescript
+function getBoardState(boardId) {
+  return Array.from(sharedLayers.entries()).map(([id, layer]) => ({
+    id, t: layer.type, x, y, w, h,
+    f: fill/bgColor/backgroundColor,
+    tx: text.slice(0, 60),
+    // rotation only if non-zero
+  }));
+}
+```
+
+Text is truncated to 60 characters. Board state is only included if the message matches `NEEDS_BOARD_STATE_RE` (update/delete/move keywords). A creation request like "create 3 stickies" doesn't send board state — so the AI can't avoid overlapping with existing content.
+
+### 12.3 AI Executor (`lib/ai-executor.ts`)
+
+All tool calls run inside a single `ydoc.transact()`. Errors in individual tool calls are caught and logged but don't abort the transaction.
+
+**`normaliseColor`:** Accepts CSS hex strings or numeric values. Returns `undefined` for null/undefined — callers must handle undefined return.
+
+**`buildTextLayer`:** Maps both `input.fill` and `input.color` to the `color` field. If the AI sends both, `fill` takes priority (`props.fill ?? props.color`). This is by design.
+
+**`handleArrangeGrid`:** Uses `Math.max(...items.map(it => it.bounds.w))` — throws if `items` is empty (guarded by `if (items.length === 0) return`). But also uses `items[0].bounds.x` as default origin when `args.origin_x` is `undefined`. If the first item in `ids` is a connector or line, `getLayerBounds` returns null and that item is skipped — so `items[0]` may not correspond to `ids[0]`.
+
+**`handleResizeFrameToFit`:** Computes `minX - padding` for the new frame X. If `padding` is large (e.g., 200), this could push the frame far off-screen. No bounds checking.
+
+---
+
+## 13. Dashboard & Server Actions (`app/dashboard/actions.ts`)
+
+```typescript
+import { supabase } from "@/lib/supabase";  // anon key client
+```
+
+**Critical:** Server Actions use the **Supabase anon client** (public key), not a service-role client. Supabase Row Level Security (RLS) runs as the anonymous role for all operations.
+
+The `boards` table migration (`supabase/migrations/multi_board_setup.sql`) sets two sets of RLS policies:
+1. Policies for `authenticated` role: use `auth.uid()::text` for ownership checks — but `auth.uid()` refers to **Supabase Auth** user ID, not Clerk user ID. Since this app uses Clerk (not Supabase Auth), `auth.uid()` is always `null` when using the anon key. These policies effectively block all authenticated-role access.
+2. Policies for `anon` role: allow all operations (`using (true)`) — the anon key gets full access. Ownership enforcement is done **entirely in application code** (Server Actions verify `owner_id = userId` via an explicit `.eq("owner_id", userId)` filter).
+
+This is noted in the migration comments but means:
+- Any user with the Supabase anon key can read/write any board's metadata if they bypass the Server Actions
+- The `yjs_updates` table has no DELETE RLS policy at all — the `deleteBoard` action's deletion of yjs data silently fails (the code comments this as "non-fatal")
+- Orphaned `yjs_updates` rows will accumulate whenever boards are deleted
+
+### 13.1 `deleteBoard` — Orphaned Data
+
+```typescript
+const { error: yjsError } = await supabase.from("yjs_updates").delete().eq("room_id", boardId);
+if (yjsError) {
+  console.error(...);
+  // Non-fatal: proceed with board deletion even if yjs cleanup fails
+}
+```
+
+The `yjs_updates` table has no DELETE RLS policy for either `authenticated` or `anon` roles (checking `supabase/schema.sql`). Postgres denies DELETE by default when RLS is enabled with no matching policy. The error is swallowed. Every deleted board leaves a permanent orphan row in `yjs_updates`.
+
+---
+
+## 14. Security Model
+
+| Concern | Status |
+|---------|--------|
+| Route protection | Clerk middleware (`proxy.ts`) protects all routes except `/`, `/sign-in/*`, `/sign-up/*` |
+| Board metadata ownership | Enforced in Server Actions via explicit `owner_id` filter — not RLS |
+| Yjs state access | ANY authenticated user can read/write any board's Yjs state (no board-level auth on yjs_updates) |
+| AI API key | Server-side only — `ANTHROPIC_API_KEY` is never sent to client |
+| Supabase keys | Only anon key is public (`NEXT_PUBLIC_SUPABASE_ANON_KEY`) — correct |
+| Clerk keys | `CLERK_SECRET_KEY` is server-side only — correct |
+
+**Known gap:** The `yjs_updates` table allows any anon user to read/write any room. If someone knows a board UUID, they can read and overwrite its content directly via Supabase APIs, bypassing the app's auth.
+
+---
+
+## 15. Database Schema
+
+### `yjs_updates` table (`supabase/schema.sql`)
+
+```sql
+CREATE TABLE yjs_updates (
+  id         bigserial PRIMARY KEY,
+  room_id    text UNIQUE NOT NULL,  -- board UUID
+  content    text,                  -- base64 Yjs state snapshot
+  created_at timestamptz DEFAULT now()
+);
+
+-- RLS policies: read/insert/update for both authenticated and anon
+-- NO DELETE policy exists
+```
+
+### `boards` table (`supabase/migrations/multi_board_setup.sql`)
+
+```sql
+CREATE TABLE boards (
+  id         uuid primary key default gen_random_uuid(),
+  title      text not null default 'Untitled Board',
+  owner_id   text not null,   -- Clerk userId (text, not UUID)
+  created_at timestamptz not null default now()
+);
+
+-- 4 policies for authenticated role (auth.uid() — ineffective with Clerk+anon key)
+-- 4 policies for anon role (full CRUD, allows true) — active via anon key
+```
+
+---
+
+## 16. Known Bugs and Fragilities
+
+These are confirmed or strongly suspected issues. Listed by severity.
+
+### 16.1 🔴 CRITICAL: Zoom Pan Desync at Zoom Limits
+
+**File:** `components/Whiteboard.tsx`, `handleWheel` (~line 556)
+
+```typescript
+const newZoom = z + delta;               // unclamped (could be < MIN_ZOOM or > MAX_ZOOM)
+setPan({ x: pos.sx - worldX * newZoom, // uses unclamped newZoom for pan calculation
+         y: pos.sy - worldY * newZoom });
+setZoom(newZoom);                         // setZoom DOES clamp internally
+```
+
+When `z = MIN_ZOOM = 0.01` and user scrolls down (`delta = -0.1`), `newZoom = -0.09`. The pan is computed as `pos.sx - worldX * (-0.09)` — flipping the direction, causing a huge pan jump. `setZoom(-0.09)` clamps to `0.01` so zoom doesn't change, but pan is now incorrect.
+
+**Fix:** Compute clamped zoom first: `const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z + delta));`
+
+### 16.2 🔴 CRITICAL: Missing DELETE RLS Policy on `yjs_updates`
+
+**File:** `supabase/schema.sql`
+
+No `DELETE` policy exists for `yjs_updates`. Supabase denies DELETE by default when RLS is enabled. `deleteBoard` server action silently fails to clean up Yjs state, causing permanent orphaned data accumulation.
+
+**Fix:** Add `CREATE POLICY "Allow delete" ON yjs_updates FOR DELETE TO anon USING (true);`
+
+### 16.3 🟠 HIGH: `lastStatus` Defaults to `"connected"` Before Connection
+
+**File:** `lib/supabase-yjs-provider.ts`, line 52
+
+```typescript
+private lastStatus: ConnectionStatus = "connected";
+```
+
+On initial mount, `setStatusCallback` is called from `Whiteboard.tsx`'s `useEffect`. It immediately receives `"connected"` even though the Realtime channel hasn't established yet. If the initial connection fails (e.g., no internet), the badge won't show until the channel emits `CHANNEL_ERROR` or `TIMED_OUT`. There's a window of false "connected" status.
+
+**Fix:** Initialize `lastStatus` to `"disconnected"` and only change to "connected" when `SUBSCRIBED` fires, OR add a distinct `"connecting"` state.
+
+### 16.4 🟠 HIGH: `destroy()` is Async but `useEffect` Cleanup Ignores the Promise
+
+**File:** `components/Whiteboard.tsx`, line 397
+
+```typescript
+useEffect(() => {
+  ensurePersistence(boardId);
+  return () => { void destroyProvider(boardId); };  // void discards async result
+}, [boardId]);
+```
+
+`destroyProvider` calls `provider.destroy()` which `await`s `saveToDb()`. If the user navigates away quickly, the async save may not complete. The browser may unload the page before the Supabase request finishes. The `beforeunload` handler also calls `void this.destroy()` — same issue.
+
+### 16.5 🟠 HIGH: `FrameElement` Resize/Title Update Without `ydoc.transact()`
+
+**File:** `components/FrameElement.tsx`, `updateFrame` and `handleTitleChange`
+
+Each pointer move during resize calls `sharedLayers.set()` directly, creating a separate Yjs transaction per event (~60/s). This floods peers with many small updates and creates many undo steps. The batch drag for frames (handled in `Whiteboard.tsx`) correctly uses `ydoc.transact()`, but individual frame resize does not.
+
+Other shape components (StickyNote, ShapeRectangle, ShapeCircle, TextElement) likely have the same issue — they access `getSharedLayers(boardId)` directly in resize handlers.
+
+### 16.6 🟠 HIGH: `auth.uid()` Mismatch with Clerk User IDs in RLS
+
+**File:** `supabase/migrations/multi_board_setup.sql`
+
+RLS policies for the `authenticated` role check `owner_id = auth.uid()::text`. Since the app uses Clerk (not Supabase Auth), `auth.uid()` returns `null` for all requests made with the Supabase anon key. These policies are inoperative. The `anon` role policies allow all operations. This means RLS provides zero access control in practice — all protection relies on application-level code.
+
+### 16.7 🟡 MEDIUM: `ConnectorElement` Always Re-renders on Any Layer Change
+
+**File:** `components/Whiteboard.tsx` + `components/ConnectorElement.tsx`
+
+`useYjsStore` returns `new Map(layers.entries())` on every Y.Map change. Each render, `layers.get(conn.fromId)` and `layers.get(conn.toId)` return new object references even if the data is unchanged. `memo` on `ConnectorElement` uses shallow prop comparison — since `fromLayer` and `toLayer` are new objects each time, memo always re-renders the connector even for unrelated changes.
+
+### 16.8 🟡 MEDIUM: Marquee Selection Uses Overlap, Not Containment
+
+**File:** `components/Whiteboard.tsx`, `handleBoardPointerUp` (~line 654)
+
+```typescript
+if (bbox.x2 >= w1.x && bbox.x1 <= w2.x && bbox.y2 >= w1.y && bbox.y1 <= w2.y) hit.add(id);
+```
+
+This is an **intersection** test (any overlap), not a containment test. Elements that partially overlap the marquee are selected. This may be intentional (similar to Figma's behavior) but differs from some tools' "containment only" behavior.
+
+### 16.9 🟡 MEDIUM: AI Tool History Violates Anthropic Multi-Turn Tool Protocol
+
+**File:** `components/AIChat.tsx`
+
+After a tool-use turn, the conversation history stores a plain-text summary as the assistant message instead of the required `tool_result` blocks. The Anthropic API expects tool-use messages to be followed by `tool_result` user messages. This bypasses that requirement. The API currently accepts this (the model treats the summary as a normal assistant turn) but it's not spec-compliant and could break if Anthropic tightens validation.
+
+### 16.10 🟡 MEDIUM: `hitTestShapeLayers` Doesn't Account for Rotation
+
+**File:** `components/Whiteboard.tsx`, `hitTestShapeLayers` function
+
+```typescript
+if (wx >= bounds.x1 && wx <= bounds.x2 && wy >= bounds.y1 && wy <= bounds.y2) return id;
+```
+
+Rotated shapes (sticky notes, rectangles, circles) are hit-tested against their **axis-aligned** bounding box, not their rotated bounds. For a 45° rotated shape, the hit test succeeds in the corners of the AABB even though those corners are visually empty, and misses the corners of the actual rotated shape.
+
+This affects: connector anchor target detection, marquee selection, and future cursor-based interactions.
+
+### 16.11 🟡 MEDIUM: Connector Hover Hit Test Doesn't Account for Rotation
+
+Same as 16.10 but for the connector tool's hover detection in `handleConnectorPointerMove`.
+
+### 16.12 🟡 MEDIUM: `colorPalette` Local State Goes Stale on Selection Change
+
+**File:** `components/Whiteboard.tsx`, `ColorPalette` inline component
+
+```typescript
+const [hex, setHex] = useState(value);
+useEffect(() => setHex(value), [value]);
+```
+
+When selection changes mid-typing in the hex input, the `useEffect` fires on the next render and resets `hex` to the new `value`. There's a brief render where both old text and new value coexist. More importantly, if the user types a partial hex (e.g., `"#ff"`) and clicks another shape, the effect fires and resets the input, discarding the partial entry.
+
+### 16.13 🟡 MEDIUM: `boardStore` Not Cleared on Board ID Change
+
+**File:** `lib/yjs-store.ts`
+
+`boardStore` is a module-level Map. When `destroyProvider(boardId)` is called (on `Whiteboard` unmount), the board is removed from the Map. But if the component remounts with the same `boardId` before `destroy()` completes, `getOrCreateBoardState` may find the Map entry deleted (since `boardStore.delete(boardId)` runs before `await state.provider.destroy()`). The re-mount creates a new provider, and two providers may briefly coexist (the old one still saving, the new one loading and subscribing).
+
+### 16.14 🟡 MEDIUM: `getElementsInFrame` Uses `?? 0` for Optional Dimensions
+
+**File:** `lib/utils.ts`, line 48
+
+```typescript
+x2 = layer.x + ((layer as { width?: number }).width ?? 0);
+```
+
+A `StickyLayer` with `width: undefined` gets `x2 = layer.x`. This makes the bounding box degenerate (zero width). Such a sticky would only be "contained" in a frame if its `x === frame.x` and the frame is non-negative width. In practice, toolbar-created stickies always set explicit widths, but AI-created stickies or programmatically-created ones might not.
+
+### 16.15 🟡 MEDIUM: Orphan Cleanup Observer Has Empty Dependency Array
+
+**File:** `components/Whiteboard.tsx`, line 448
+
+```typescript
+useEffect(() => {
+  sharedLayers.observe(cleanup);
+  return () => sharedLayers.unobserve(cleanup);
+}, []);  // ← missing deps: sharedLayers, ydoc
+```
+
+`sharedLayers` and `ydoc` are captured at mount. For the same `boardId`, these don't change, so this is safe in practice. But the ESLint exhaustive-deps rule would flag this, and if the component ever re-renders with a different `boardId` without unmounting (currently impossible due to how routing works, but architecturally fragile), it would observe the wrong `sharedLayers`.
+
+### 16.16 🟡 MEDIUM: Duplicate Selection Logic in `handleSelect`
+
+**File:** `components/Whiteboard.tsx`, line 455
+
+```typescript
+const handleSelect = useCallback((id, shiftKey) => {
+  const prev = selectedIdsRef.current;
+  if (!shiftKey && prev.has(id)) return;  // ← no-op if already selected
+  // ...
+  setSelectedIds(next);
+}, []);
+```
+
+If the user clicks an already-selected item without shift, `handleSelect` returns early and `setSelectedIds` is NOT called. But `selectedIdsRef` is also not updated. This is intentional (clicking selected item doesn't deselect). However, the `selectedIdsRef.current` and the React `selectedIds` state may diverge if `updateSelectedIds` was called externally (e.g., from marquee) — since `handleSelect` writes to both `selectedIdsRef` and calls `setSelectedIds` only sometimes, there's a subtle path where they diverge.
+
+### 16.17 🟢 LOW: `generateId` Collision Risk
+
+**File:** `components/Whiteboard.tsx`, line 97
+
+```typescript
+function generateId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+```
+
+`Date.now()` has millisecond resolution. `Math.random().toString(36).slice(2, 9)` gives ~5.5 bytes of entropy (~36^7 ≈ 78 billion combinations). Two users simultaneously creating a layer at the same millisecond have a 1/78B chance of collision. In practice, Yjs Y.Map handles this as a last-writer-wins merge, so the collision would silently drop one layer. Low probability but possible in high-concurrency scenarios.
+
+### 16.18 🟢 LOW: `handleBoardPointerDown` Recreated on Every Pan Change
+
+The `handleBoardPointerDown` callback has `pan` in its dependency array. Every pan state update (which happens at 60fps during panning) recreates this callback. Since it's attached via React's synthetic event system this doesn't cause re-renders, but it does generate garbage every frame during panning.
+
+**Fix:** Replace `pan.x/y` capture with `transformRef.current.pan.x/y` in a stable callback.
+
+### 16.19 🟢 LOW: `screentToWorld` Recreated on Every Pan/Zoom Change
+
+`screenToWorld` in `BoardTransformProvider` depends on `pan` and `zoom`. Every pan/zoom change recreates it. This propagates into many callbacks in `Whiteboard.tsx` that have `screenToWorld` in their dependency arrays, causing cascading recreation of handlers during every interaction.
+
+### 16.20 🟢 LOW: Model Names are Hardcoded Strings
+
+**File:** `app/api/ai/route.ts`
+
+```typescript
+return { model: "claude-sonnet-4-6", tier: "reasoning" };
+return { model: "claude-haiku-4-5", tier: "fast" };
+```
+
+No validation that these model IDs are valid. If Anthropic deprecates them, the API will return errors that propagate to users with no clear error message.
+
+### 16.21 🟢 LOW: `AIChat` Slow Timer Not Cancelled on Unmount
+
+**File:** `components/AIChat.tsx`
+
+```typescript
+const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+// No useEffect cleanup for slowTimerRef
+```
+
+If the component unmounts while the AI is loading (e.g., user navigates away), the `slowTimerRef` timeout fires and tries to call `setStatusText` on an unmounted component. React 18+ suppresses this warning but it's still a potential state update after unmount.
+
+### 16.22 🟢 LOW: Frame Duplicate Doesn't Skip Frames
+
+**File:** `components/Whiteboard.tsx`, keyboard handler `Cmd+D`
+
+```typescript
+if (layer.type === "connector") continue;  // connectors skipped
+// frames are NOT skipped
+sharedLayers.set(newId, { ...layer, x: layer.x + PASTE_OFFSET, y: layer.y + PASTE_OFFSET });
+```
+
+Duplicating a frame creates a new frame but does NOT duplicate the contained children. The new frame appears at offset position, empty. This is probably unintentional — the user likely expects the frame and its contents to be duplicated together. Compare to delete and batch-move which properly handle children.
+
+### 16.23 🟢 LOW: `handleConnectorPointerMove` Updates `connectorDraftRef` Before the `fromId` Check
+
+**File:** `components/Whiteboard.tsx`, ~line 676
+
+```typescript
+const updated = { ...connectorDraftRef.current, currentPt: [world.x, world.y] };
+connectorDraftRef.current = updated;  // ← updated
+setConnectorDraftState(updated);
+
+const hoverId = hitTestShapeLayers(...);
+const targetId = hoverId !== connectorDraftRef.current?.fromId ? hoverId : null;  // ← uses updated ref
+```
+
+`connectorDraftRef.current` was just mutated to `updated`, which still has the correct `fromId` (only `currentPt` changed). So the `fromId` check is correct. But relying on a just-mutated ref is fragile and hard to reason about.
+
+---
+
+## 17. Architectural Decisions and Their Tradeoffs
+
+### 17.1 No `ydoc.transact()` in Shape Components
+
+Shape components (StickyNote, ShapeRectangle, ShapeCircle, TextElement, FrameElement) call `getSharedLayers(boardId)` and directly call `sharedLayers.set()` in their resize and edit handlers. Each call creates an implicit Yjs transaction. This means:
+- Multiple broadcasts per resize (one per pointer move)
+- Multiple undo steps per resize
+- Each peer receives many small updates instead of one final state
+
+`ydoc` is not passed to shape components — they only receive `boardId` and call `getSharedLayers` inside callbacks. To fix, `ydoc` would need to be passed as a prop or accessed via a hook.
+
+### 17.2 `Y.Map` Insertion-Order Z-Ordering
+
+Layers render in `Y.Map` insertion order (no `z` field). The Y.Map does not preserve insertion order consistently across peers in all Yjs versions (though in practice Yjs maintains insertion-time ordering). There is no "bring to front / send to back" feature.
+
+### 17.3 Frame Children are Computed, Not Stored
+
+`getElementsInFrame()` is O(N) in the number of layers. Called at: drag start, delete, keyboard delete, and by the AI executor's `resize_frame_to_fit`. On very large boards, this could be slow.
+
+### 17.4 Supabase Anon Key in Browser
+
+The Supabase anon key is public (prefixed `NEXT_PUBLIC_`). Any browser user can use it to directly query Supabase. RLS is the only protection, and as noted above, RLS effectiveness is limited in this architecture.
+
+---
+
+## 18. Environment Variables
+
+| Variable | Where Used | Required |
+|----------|-----------|---------|
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Client (Clerk auth) | Yes |
+| `CLERK_SECRET_KEY` | Server (middleware, server actions) | Yes |
+| `NEXT_PUBLIC_SUPABASE_URL` | Client + Server (Supabase client) | Yes |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client + Server (anon key) | Yes |
+| `ANTHROPIC_API_KEY` | Server only (`app/api/ai/route.ts`) | Yes (for AI) |
+
+Note: There is NO service-role Supabase key — all DB operations use the anon key.
+
+---
+
+## 19. Testing
+
+### Unit Tests (Vitest, jsdom)
+
+Located in `lib/__tests__/` and `components/__tests__/`. Key mocks in `lib/__tests__/setup.ts`.
+
+| Test File | What It Tests |
+|-----------|--------------|
+| `connection-status.test.ts` | Channel error → disconnected, online/offline events, late-callback replay |
+| `reconnect.test.ts` | `handleOnline` creates a fresh channel subscription |
+| `supabase-yjs-provider.test.ts` | DB load/save persistence |
+| `useYjsStore.test.ts` | Hook subscription and refresh |
+| `yjs-store.test.ts` | Per-board isolation via boardStore |
+| `utils.test.ts` | `getElementsInFrame`, `cn`, `isValidUUID` |
+| `WhiteboardAddShapes.test.tsx` | Shape creation via toolbar |
+| `WhiteboardConnectors.test.tsx` | Connector creation and cleanup |
+| `WhiteboardFrames.test.tsx` | Frame creation and child management |
+| `WhiteboardMovement.test.tsx` | Drag, marquee selection, keyboard shortcuts |
+
+### E2E Tests (Playwright)
+
+Located in `e2e/`. Require a running dev server and Supabase + Clerk credentials.
+
+---
+
+## 20. Key Code Patterns to Look For When Hunting Bugs
+
+1. **Any `sharedLayers.set()` NOT inside `ydoc.transact()`** — look in shape component resize handlers
+2. **Any `screenToWorld()` call using stale pan/zoom** — look for `transformRef` vs direct closure capture
+3. **Any `getElementsInFrame()` called without a fresh snapshot** — should use `new Map(sharedLayers.entries())`
+4. **`e.target` used for pointer capture release** — should match the element that called `setPointerCapture`
+5. **Awareness state updates that could fire after component unmount** — async callbacks, timer callbacks
+6. **`lastStatus` assumed to represent real connection state** — provider initializes as "connected" before actual connection
+7. **Missing `ydoc` in shape component callbacks** — those components only get `boardId`, not `ydoc`
+8. **Connector rendering with zero-size bounding boxes** — when `StickyLayer.width` is undefined
+9. **Rotation ignored in bounding-box hit tests** — `hitTestShapeLayers`, `getElementsInFrame`, marquee
+10. **Missing DELETE RLS policy** — yjs_updates cannot be deleted
+
+---
+
+## 21. How to Run Locally
 
 ```bash
 npm install
 
-# .env.local:
+# Create .env.local:
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 CLERK_SECRET_KEY=sk_test_...
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
 ANTHROPIC_API_KEY=sk-ant-api03-...
 
-# Apply schema in Supabase SQL Editor (supabase/schema.sql)
+# Apply schema (Supabase SQL Editor):
+# 1. supabase/schema.sql
+# 2. supabase/migrations/multi_board_setup.sql
 
-npm run dev
-# → http://localhost:3000
+npm run dev        # → http://localhost:3000
+npm test           # unit tests
+npm run test:e2e   # E2E (requires running server + test creds)
 ```
 
 ---
 
-## 11. Deployment
+## 22. Feature Status Summary
 
-- **Vercel** (Next.js native) — set all four env vars in project settings
-- **Supabase** — free tier sufficient for MVP; schema applied via SQL editor
-- **Clerk** — free tier sufficient; production Vercel domain must be added in Clerk dashboard
-- Full step-by-step instructions in `DEPLOY.md`
-
----
-
-## 12. Summary
-
-CollabBoard is a **production-quality, self-hosted collaborative whiteboard** built on Next.js 16 + Yjs + Supabase + Clerk. Yjs handles all CRDT state, a custom provider handles transport (Supabase Realtime broadcast) and persistence (Supabase Postgres), and React components read from Yjs and write back.
-
-**Current feature palette:** sticky notes, rectangles, circles, text, lines, arrows, **smart connectors** with three routing styles (straight, curved, elbow), configurable endpoints, labels, colours, and full orphan cleanup — plus **Frames** for organizational grouping with atomic batch-move, cascading delete, title editing, resize, fill color, and connector targeting. **Shape rotation** (sticky notes, rectangles, circles) via a drag handle that writes atomically to the Yjs document and syncs to all peers. Multi-select, marquee selection, copy/paste, duplicate, batch drag, context-sensitive formatting, a complete keyboard shortcut system, and live multi-user cursor presence are all implemented.
-
-**The AI Board Agent** is fully implemented: a floating chat UI backed by `app/api/ai/route.ts` that routes simple commands to Claude Haiku and complex templates (SWOT, Retrospective, User Journey) to Claude Sonnet. The system prompt and tool schema are ephemerally cached to cut TTFT. Six tools cover creation, bulk creation, updates, deletion, grid arrangement, and frame auto-sizing. All changes are applied atomically via `lib/ai-executor.ts` inside a single `ydoc.transact`, broadcasting to all peers instantly.
-
-**Graceful disconnect/reconnect handling** is implemented: a non-blocking floating badge (dark pill with a pulsing amber dot, WifiOff icon, and "Reconnecting…" text) appears whenever the connection drops. The signal comes from both `window` online/offline events (reliable for DevTools Network throttling) and the Supabase Realtime channel subscription status. The provider stores the last known status and replays it to any late-registering React callback, eliminating the singleton/mount-order race condition. A Vitest test suite (`npm test`) covers all three critical paths.
-
-**Cursor awareness throttle** is implemented: only the Yjs `awareness.setLocalStateField` write inside `handlePointerMove` is throttled to 33 ms (~30 FPS) using `lib/throttle.ts` — a pure leading+trailing-edge utility stored in a `useRef` so it survives React re-renders without stale closures. Canvas pan, marquee selection, and shape dragging are completely unaffected. The `pointerleave` handler cancels any pending trailing call and immediately writes `cursor: null`. Four Vitest unit tests verify all four behaviours.
-
-**Most impactful next features** in priority order:
-
-1. **Undo/Redo** — `Y.UndoManager` already supported by Yjs; just needs wiring (AI transactions would be one undo step)
-2. **Multiple boards** — URL-based routing, board listing UI
-3. **Layer z-ordering** — bring to front / send to back within each visual group
-4. **Freehand drawing** — pencil tool
-5. **Editable connector labels** — inline editing for `ConnectorLayer.label`
-6. **AI streaming** — stream tool calls for perceived instant feedback on large templates
-7. **Rich text in sticky notes** — `Y.Text` + y-prosemirror
-8. **Per-user cursor colors**
-9. **Image upload** via Supabase Storage
-10. **Export to PNG/SVG**
-
-The codebase is ~28 files, fully typed in strict TypeScript, and straightforward to extend. The hardest architectural change would be adding character-level collaborative text (y-prosemirror) or switching to canvas-based rendering for scale. Everything else — especially undo/redo — is relatively contained.
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Authentication (Clerk) | ✅ | Protected routes via middleware |
+| Multi-board dashboard | ✅ | /dashboard, boards table, Server Actions |
+| Real-time CRDT sync | ✅ | Yjs + custom Supabase provider |
+| Board persistence | ✅ | Auto-save 5s + debounce 1s + beforeunload |
+| Sticky notes | ✅ | Drag, resize, edit, font size, bg color, rotation |
+| Rectangles | ✅ | Drag, resize, fill color, rotation |
+| Circles | ✅ | Drag, resize, fill color, rotation |
+| Text elements | ✅ | Drag, resize, edit, font size, text color |
+| Lines / Arrows | ✅ | SVG, endpoint drag, stroke color |
+| Smart Connectors | ✅ | Straight/curved/elbow, 3 endpoint types, label |
+| Frames | ✅ | Title edit, drag border, resize, batch move, cascading delete |
+| Connector → Frame targeting | ✅ | Two-pass hit test (shapes preferred over frame) |
+| Pan / Zoom | ✅ | Drag + wheel; zoom has min/max limits (bug at limits — see §16.1) |
+| Multi-select + Marquee | ✅ | Shift+click, drag marquee, ⌘A |
+| Copy / Paste / Duplicate | ✅ | Clipboard offsets on repeated paste |
+| Keyboard shortcuts | ✅ | V/H/C/Space/Esc/⌘A/⌘D/⌘C/⌘V/Delete/? |
+| Cursor presence | ✅ | Throttled to 30fps, disappears on leave |
+| User avatars | ✅ | Shows connected users top-left |
+| Graceful disconnect badge | ✅ | Floating badge; triggered by window.online/offline + channel status |
+| AI Board Agent | ✅ | SSE streaming, 7 tools, model routing (Haiku/Sonnet), blueprint prompts |
+| Undo / Redo | ❌ | Y.UndoManager not wired |
+| Layer z-ordering | ❌ | No "bring to front" — insertion order only |
+| Freehand drawing | ❌ | No pencil tool |
+| Image upload | ❌ | No image layer type |
+| Export (PNG/SVG/PDF) | ❌ | Not implemented |
+| Rich text (Y.Text) | ❌ | Plain textarea — last-write-wins on concurrent edits |
+| Per-user cursor colors | ❌ | All cursors same appearance |
+| Mobile / touch | ❌ | No pinch-to-zoom |
+| AI connector creation | ❌ | ConnectorLayer not exposed as AI tool |
+| Editable connector labels | ❌ | Label field exists but no edit UI |
