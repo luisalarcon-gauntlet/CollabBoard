@@ -1548,9 +1548,14 @@ function WhiteboardClient({ boardId }: { boardId: string }) {
   const [readyForId, setReadyForId] = useState<string | null>(null);
 
   useEffect(() => {
-    ensurePersistence(boardId);
-    setReadyForId(boardId);
-    return () => { void destroyProvider(boardId); };
+    let active = true;
+    ensurePersistence(boardId).then(() => {
+      if (active) setReadyForId(boardId);
+    });
+    return () => {
+      active = false;
+      void destroyProvider(boardId);
+    };
   }, [boardId]);
 
   if (readyForId !== boardId) return <div className={styles.loading}>Loading board…</div>;

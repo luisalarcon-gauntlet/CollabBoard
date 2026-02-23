@@ -5,7 +5,11 @@ import { createBoard } from "./actions";
 import { Plus } from "lucide-react";
 import styles from "./page.module.css";
 
-export function CreateBoardButton() {
+type CreateBoardButtonProps = {
+  variant?: "button" | "card";
+};
+
+export function CreateBoardButton({ variant = "button" }: CreateBoardButtonProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [boardName, setBoardName] = useState("");
 
@@ -20,14 +24,29 @@ export function CreateBoardButton() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={openModal}
-        className={styles.createButton}
-      >
-        <Plus />
-        Create New Board
-      </button>
+      {variant === "card" ? (
+        <button
+          type="button"
+          onClick={openModal}
+          className={styles.createCard}
+          aria-label="Create new board"
+        >
+          <span className={styles.createCardIcon}>
+            <Plus size={18} />
+          </span>
+          New Board
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={openModal}
+          className={styles.createButton}
+        >
+          <Plus size={16} />
+          Create New Board
+        </button>
+      )}
+
       <dialog
         ref={dialogRef}
         className={styles.dialog}

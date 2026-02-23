@@ -114,6 +114,15 @@ const boardStore = new Map<string, BoardState>();
 const pendingDestroys = new Set<string>();
 
 /**
+ * Maps each boardId to its in-flight destroyProvider() promise so that
+ * ensurePersistence() can await it before attempting to re-create the
+ * provider, fixing the Strict Mode race condition where the second effect
+ * invocation finds pendingDestroys.has(boardId) === true and silently
+ * returns null.
+ */
+const pendingDestroyPromises = new Map<string, Promise<void>>();
+
+/**
  * Internal — the only path that creates a new BoardState entry.
  * Returns null if:
  *   • called on the server (typeof window === "undefined"), or
@@ -154,8 +163,14 @@ function getOrCreateBoardState(boardId: string): BoardState | null {
  * handler that captured an old boardId can no longer accidentally resurrect
  * a destroyed provider.
  */
-export function ensurePersistence(boardId: string): void {
+export async function ensurePersistence(boardId: string): Promise<void> {
   if (typeof window === "undefined") return;
+  // If a destroy is in flight for this boardId, wait for it to finish before
+  // attempting to create a new provider.  This is the fix for the Strict Mode
+  // race: the second effect invocation previously found pendingDestroys set and
+  // got null back from getOrCreateBoardState(), leaving the canvas blank.
+  const inflight = pendingDestroyPromises.get(boardId);
+  if (inflight) await inflight;
   getOrCreateBoardState(boardId);
 }
 
@@ -173,9 +188,14 @@ export function ensurePersistence(boardId: string): void {
  * the map.  getOrCreateBoardState() treats a pending-destroy boardId as
  * "not available" and returns null instead of creating a duplicate.
  */
-export async function destroyProvider(boardId: string): Promise<void> {
+export function destroyProvider(boardId: string): Promise<void> {
+  // If a destroy is already in flight for this boardId, return the same
+  // promise so callers can await it without double-destroying.
+  const existing = pendingDestroyPromises.get(boardId);
+  if (existing) return existing;
+
   const state = boardStore.get(boardId);
-  if (!state) return;
+  if (!state) return Promise.resolve();
 
   // Remove from the live map first so all read-only accessors immediately
   // return null — important for the stale-closure safety guarantee.
@@ -184,11 +204,12 @@ export async function destroyProvider(boardId: string): Promise<void> {
   // Guard the async window: block getOrCreateBoardState() until the final
   // DB save completes so no duplicate provider can be spawned.
   pendingDestroys.add(boardId);
-  try {
-    await state.provider.destroy();
-  } finally {
+  const promise = state.provider.destroy().finally(() => {
     pendingDestroys.delete(boardId);
-  }
+    pendingDestroyPromises.delete(boardId);
+  });
+  pendingDestroyPromises.set(boardId, promise);
+  return promise;
 }
 
 // ─── Read-only accessors ─────────────────────────────────────────────────────

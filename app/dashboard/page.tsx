@@ -24,28 +24,38 @@ export default async function DashboardPage() {
   const list = boards ?? [];
 
   return (
-    <div className={styles.container}>
-      <header className={styles.header}>
-        <h1 className={styles.title}>My Boards</h1>
-        <div className={styles.headerActions}>
-          <CreateBoardButton />
-          <UserButton afterSignOutUrl="/" />
+    <div className={styles.page}>
+      {/* ── Top Nav ── */}
+      <nav className={styles.nav}>
+        <span className={styles.navLogo}>
+          <span className={styles.navLogoIcon}>✦</span> ThinkSpace AI
+        </span>
+        <UserButton afterSignOutUrl="/" />
+      </nav>
+
+      {/* ── Main content ── */}
+      <main className={styles.main}>
+        <div className={styles.pageHeader}>
+          <h1 className={styles.pageTitle}>My Boards</h1>
+          <p className={styles.pageSubtitle}>
+            Pick up where you left off, or start something new.
+          </p>
         </div>
-      </header>
-      <div className={styles.grid}>
-        {list.length === 0 ? (
-          <p className={styles.empty}>No boards yet. Create one to get started.</p>
-        ) : (
-          list.map((board) => (
+
+        <div className={styles.grid}>
+          {/* Dashed "create" card always first */}
+          <CreateBoardButton variant="card" />
+
+          {list.map((board) => (
             <BoardCard
               key={board.id}
               id={board.id}
               title={board.title}
               createdAt={board.created_at}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      </main>
     </div>
   );
 }
