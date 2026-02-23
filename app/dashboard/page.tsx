@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { CreateBoardButton } from "./CreateBoardButton";
 import { BoardCard } from "./BoardCard";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import styles from "./page.module.css";
 
 export default async function DashboardPage() {
@@ -24,20 +25,23 @@ export default async function DashboardPage() {
   const list = boards ?? [];
 
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page} dark:bg-gray-950`}>
       {/* ── Top Nav ── */}
-      <nav className={styles.nav}>
-        <span className={styles.navLogo}>
+      <nav className={`${styles.nav} dark:bg-gray-900/85 dark:border-gray-800`}>
+        <span className={`${styles.navLogo} dark:text-white`}>
           <span className={styles.navLogoIcon}>✦</span> ThinkSpace AI
         </span>
-        <UserButton afterSignOutUrl="/" />
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          <UserButton afterSignOutUrl="/" />
+        </div>
       </nav>
 
       {/* ── Main content ── */}
       <main className={styles.main}>
         <div className={styles.pageHeader}>
-          <h1 className={styles.pageTitle}>My Boards</h1>
-          <p className={styles.pageSubtitle}>
+          <h1 className={`${styles.pageTitle} dark:text-white`}>My Boards</h1>
+          <p className={`${styles.pageSubtitle} dark:text-slate-400`}>
             Pick up where you left off, or start something new.
           </p>
         </div>

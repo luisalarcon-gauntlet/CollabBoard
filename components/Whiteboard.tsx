@@ -28,6 +28,7 @@ import { LineElement } from "./LineElement";
 import { ConnectorElement, getLayerBounds } from "./ConnectorElement";
 import { FrameElement } from "./FrameElement";
 import { HelpModal } from "./HelpModal";
+import { ThemeToggle } from "./ThemeToggle";
 import {
   StickyNote as StickyIcon,
   Square,
@@ -1376,6 +1377,7 @@ function WhiteboardInner({ boardId }: { boardId: string }) {
           <Link2 size={20} />
           {shareCopied ? "Copied!" : "Share Board"}
         </button>
+        <ThemeToggle variant="canvas" />
         <Avatars boardId={boardId} inline />
       </div>
       <CursorPresence boardId={boardId} />

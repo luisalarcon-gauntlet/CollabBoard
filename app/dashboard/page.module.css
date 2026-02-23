@@ -385,3 +385,111 @@
     padding: 1.75rem 1.25rem 3rem;
   }
 }
+
+/* ── Dark mode overrides ── */
+:global(html.dark) .page {
+  background: #030712;
+}
+
+:global(html.dark) .nav {
+  background: rgba(15, 23, 42, 0.85);
+  border-bottom-color: #1e293b;
+}
+
+:global(html.dark) .navLogo {
+  color: #f8fafc;
+}
+
+:global(html.dark) .pageTitle {
+  color: #f8fafc;
+}
+
+:global(html.dark) .pageSubtitle {
+  color: #94a3b8;
+}
+
+:global(html.dark) .card {
+  background: #0f172a;
+  border-color: #1e293b;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+:global(html.dark) .card:hover {
+  border-color: #334155;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+}
+
+:global(html.dark) .cardTitle {
+  color: #f1f5f9;
+}
+
+:global(html.dark) .cardDate {
+  color: #475569;
+}
+
+:global(html.dark) .deleteButton {
+  color: #475569;
+}
+
+:global(html.dark) .deleteButton:hover {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+:global(html.dark) .createCard {
+  background: #0f172a;
+  border-color: #334155;
+  color: #818cf8;
+}
+
+:global(html.dark) .createCard:hover {
+  background: #1e1b4b;
+  border-color: #6366f1;
+}
+
+:global(html.dark) .createCardIcon {
+  background: #1e1b4b;
+  color: #818cf8;
+}
+
+:global(html.dark) .createCard:hover .createCardIcon {
+  background: #312e81;
+}
+
+:global(html.dark) .dialog {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+
+:global(html.dark) .dialogTitle {
+  color: #f1f5f9;
+}
+
+:global(html.dark) .dialogDescription {
+  color: #94a3b8;
+}
+
+:global(html.dark) .dialogInput {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+:global(html.dark) .dialogInput:focus {
+  background: #1e293b;
+  border-color: #6366f1;
+}
+
+:global(html.dark) .dialogLabel {
+  color: #cbd5e1;
+}
+
+:global(html.dark) .dialogCancel {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+
+:global(html.dark) .dialogCancel:hover {
+  background: #334155;
+}

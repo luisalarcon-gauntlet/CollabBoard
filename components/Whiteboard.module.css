@@ -418,3 +418,131 @@
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
   color: #0f172a;
 }
+
+/* ── Dark mode overrides ─────────────────────────────────────────────────── */
+
+:global(html.dark) .boardContainer {
+  background-color: #030712;
+  background-image: radial-gradient(circle, #333 1px, transparent 1px);
+}
+
+:global(html.dark) .loading {
+  background-color: #030712;
+  background-image: radial-gradient(circle, #333 1px, transparent 1px);
+  color: #94a3b8;
+}
+
+:global(html.dark) .toolbar {
+  background: rgba(31, 41, 55, 0.82);
+  border-color: rgba(55, 65, 81, 0.65);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+:global(html.dark) .toolModeBtn {
+  color: #9ca3af;
+}
+
+:global(html.dark) .toolModeBtn:hover {
+  background: #374151;
+  color: #f9fafb;
+}
+
+:global(html.dark) .toolModeBtnActive {
+  background: #1e3a8a !important;
+  color: #93c5fd !important;
+  border-color: #1d4ed8 !important;
+}
+
+:global(html.dark) .toolbarDivider {
+  background: #374151;
+}
+
+:global(html.dark) .formatLabel {
+  color: #6b7280;
+}
+
+:global(html.dark) .hexInput {
+  background: #1f2937;
+  border-color: #374151;
+  color: #e5e7eb;
+}
+
+:global(html.dark) .fontSizeBtn {
+  background: #1f2937;
+  border-color: #374151;
+  color: #e5e7eb;
+}
+
+:global(html.dark) .fontSizeBtn:hover {
+  background: #374151;
+  border-color: #4b5563;
+}
+
+:global(html.dark) .fontSizeValue {
+  color: #e5e7eb;
+}
+
+:global(html.dark) .connectorStyleBtn {
+  background: #1f2937;
+  border-color: #374151;
+  color: #9ca3af;
+}
+
+:global(html.dark) .connectorStyleBtn:hover {
+  background: #1e3a8a;
+  border-color: #1d4ed8;
+  color: #93c5fd;
+}
+
+:global(html.dark) .connectorStyleBtnActive {
+  background: #1e3a8a !important;
+  border-color: #2563eb !important;
+  color: #93c5fd !important;
+}
+
+:global(html.dark) .backButton {
+  color: #d1d5db;
+  background: rgba(31, 41, 55, 0.85);
+  border-color: rgba(75, 85, 99, 0.7);
+}
+
+:global(html.dark) .backButton:hover {
+  color: #f9fafb;
+  background: rgba(31, 41, 55, 0.97);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+:global(html.dark) .helpButton {
+  color: #9ca3af;
+  background: rgba(31, 41, 55, 0.85);
+  border-color: rgba(75, 85, 99, 0.7);
+}
+
+:global(html.dark) .helpButton:hover {
+  color: #f9fafb;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+:global(html.dark) .addStickyButton    { background-color: #451a03; color: #fde68a; }
+:global(html.dark) .addStickyButton:hover { background-color: #78350f; }
+:global(html.dark) .addRectangleButton { background-color: #1e3a5f; color: #93c5fd; }
+:global(html.dark) .addRectangleButton:hover { background-color: #1e40af; }
+:global(html.dark) .addCircleButton    { background-color: #052e16; color: #86efac; }
+:global(html.dark) .addCircleButton:hover { background-color: #14532d; }
+:global(html.dark) .addTextButton      { background-color: #2e1065; color: #d8b4fe; }
+:global(html.dark) .addTextButton:hover { background-color: #4c1d95; }
+:global(html.dark) .addLineButton      { background-color: #1f2937; color: #e5e7eb; }
+:global(html.dark) .addLineButton:hover { background-color: #374151; }
+:global(html.dark) .addArrowButton     { background-color: #431407; color: #fdba74; }
+:global(html.dark) .addArrowButton:hover { background-color: #7c2d12; }
+:global(html.dark) .addFrameButton     { background-color: #052e16; color: #86efac; }
+:global(html.dark) .addFrameButton:hover { background-color: #14532d; }
+:global(html.dark) .duplicateButton { background-color: #1e3a8a; color: #93c5fd; }
+:global(html.dark) .duplicateButton:hover { background-color: #1d4ed8; }
+:global(html.dark) .deleteButton    { background-color: #450a0a; color: #fca5a5; }
+:global(html.dark) .deleteButton:hover { background-color: #7f1d1d; }
+:global(html.dark) .resetButton     { background-color: #1f2937; color: #d1d5db; }
+:global(html.dark) .resetButton:hover { background-color: #374151; }

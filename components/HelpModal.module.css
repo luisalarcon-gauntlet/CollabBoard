@@ -126,3 +126,49 @@
   background: #e2e8f0;
   margin: 1rem 0;
 }
+
+/* ── Dark mode overrides ── */
+:global(html.dark) .modal {
+  background: #0f172a;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+:global(html.dark) .title {
+  color: #f1f5f9;
+}
+
+:global(html.dark) .closeButton {
+  background: #1e293b;
+  color: #94a3b8;
+}
+
+:global(html.dark) .closeButton:hover {
+  background: #334155;
+  color: #f1f5f9;
+}
+
+:global(html.dark) .sectionTitle {
+  color: #64748b;
+}
+
+:global(html.dark) .shortcutRow:nth-child(odd) {
+  background: #1e293b;
+}
+
+:global(html.dark) .shortcutDesc {
+  color: #cbd5e1;
+}
+
+:global(html.dark) .key {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+
+:global(html.dark) .keySep {
+  color: #475569;
+}
+
+:global(html.dark) .divider {
+  background: #1e293b;
+}
